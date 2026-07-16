@@ -25,7 +25,6 @@ def ensure_whisper():
 
 
 ensure_whisper()
-import whisper  # noqa: E402
 
 
 class Transcriber:
@@ -38,6 +37,7 @@ class Transcriber:
         """Загружает модель Whisper (лениво, один раз)."""
         if self._model is None:
             import torch
+            import whisper
 
             device = "cuda" if torch.cuda.is_available() else "cpu"
             self._model = whisper.load_model(model_name, device=device)

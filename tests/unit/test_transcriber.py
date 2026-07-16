@@ -18,7 +18,7 @@ def transcriber():
 def mock_model(mocker):
     model = MagicMock()
     model.transcribe.return_value = {"text": "  распознанный текст  "}
-    mocker.patch("processing.transcriber.whisper.load_model", return_value=model)
+    mocker.patch("whisper.load_model", return_value=model)
     return model
 
 
@@ -26,7 +26,7 @@ def mock_model(mocker):
 def mock_load_model(mocker):
     model = MagicMock()
     model.transcribe.return_value = {"text": "  распознанный текст  "}
-    patched = mocker.patch("processing.transcriber.whisper.load_model", return_value=model)
+    patched = mocker.patch("whisper.load_model", return_value=model)
     return patched
 
 

@@ -4,10 +4,11 @@ import config
 
 
 def test_colors_are_hex():
-    for name, value in config.COLORS.items():
-        assert isinstance(value, str), f"{name} not a string"
-        assert value.startswith("#"), f"{name} missing # prefix"
-        assert len(value) in (4, 7), f"{name} invalid hex length: {value}"
+    for palette in (config.LIGHT_COLORS, config.DARK_COLORS):
+        for name, value in palette.items():
+            assert isinstance(value, str), f"{name} not a string"
+            assert value.startswith("#"), f"{name} missing # prefix"
+            assert len(value) in (4, 7), f"{name} invalid hex length: {value}"
 
 
 def test_ollama_url_valid():

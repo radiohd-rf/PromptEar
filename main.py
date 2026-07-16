@@ -3,9 +3,13 @@
 
 import importlib.util
 import subprocess
+import sys
 import tkinter as tk
 
 from app import PromptEarApp
+from utils.logger import get_logger
+
+logger = get_logger()
 
 
 def ensure_deps():
@@ -17,6 +21,7 @@ def ensure_deps():
         missing.append("openai-whisper")
 
     if missing:
+        logger.info(f"Установка зависимостей: {', '.join(missing)}")
         print(f"Установка: {', '.join(missing)}...")
         if "torch" in missing:
             subprocess.run(
@@ -36,9 +41,20 @@ if HAS_DND:
 
 
 def main():
-    root = TkinterDnD.Tk() if HAS_DND else tk.Tk()
-    app = PromptEarApp(root)
-    app.run()
+    try:
+        root = TkinterDnD.Tk() if HAS_DND else tk.Tk()
+        app = PromptEarApp(root)
+        app.run()
+    except Exception as exc:
+        logger.critical(f"Критическая ошибка: {exc}", exc_info=True)
+        from tkinter import messagebox
+
+        messagebox.showerror(
+            "Критическая ошибка",
+            f"PromptEar не может запуститься.\n\n{exc}\n\n"
+            f"Подробнее: %APPDATA%\\PromptEar\\logs\\app.log",
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

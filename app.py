@@ -2,6 +2,7 @@
 
 import contextlib
 import importlib.util
+import json
 import os
 import queue
 import shutil
@@ -12,12 +13,16 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 from config import (
-    COLORS,
+    DARK_COLORS,
+    ERROR_MESSAGES,
+    FIRST_RUN_FLAG,
     FONT_FAMILY,
     FONT_SIZE,
     FONT_SIZE_SMALL,
+    LIGHT_COLORS,
     OUTPUT_FORMATS,
     QUEUE_POLL_MS,
+    SETTINGS_FILE,
     SPINNER_FRAMES,
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
@@ -27,15 +32,11 @@ from processing.enhancer import OllamaEnhancer
 from processing.transcriber import Transcriber
 from ui.widgets import PlaceholderEntry, PlaceholderListbox
 from utils.files import find_audio_files, save_docx, save_txt
+from utils.logger import get_logger
 from utils.protocol import QueueMsg
 
-WHITE = COLORS["white"]
-BORDER = COLORS["border"]
-FG = COLORS["fg"]
-PH = COLORS["ph"]
-BTN_ACTIVE_BG = COLORS["btn_active_bg"]
+logger = get_logger()
 
-# Проверка tkinterdnd2
 HAS_DND = importlib.util.find_spec("tkinterdnd2") is not None
 
 
@@ -44,10 +45,6 @@ class PromptEarApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("PromptEar — транскрибация аудио")
-        self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
-        self.root.resizable(False, False)
-
         self._queue: queue.Queue = queue.Queue()
         self._check_queue()
 
@@ -56,6 +53,9 @@ class PromptEarApp:
         self._ffmpeg_ok = shutil.which("ffmpeg") is not None
         self._cancel = False
         self._running = False
+        self._dark_mode = False
+
+        self._load_settings()
 
         self._spinner_frames = SPINNER_FRAMES
         self._spinner_index = 0
@@ -63,7 +63,164 @@ class PromptEarApp:
         self._spinner_job = None
 
         self._build_ui()
+        self._apply_theme()
 
+        self._onboarding()
+        self._report_gpu()
+        self._setup_dnd()
+        self._process_cli_args()
+        self._check_ollama_async()
+
+    # ── Настройки ───────────────────────────────────────────────────────────
+
+    def _load_settings(self):
+        if SETTINGS_FILE.exists():
+            try:
+                data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+                self._dark_mode = data.get("dark_mode", False)
+            except Exception as exc:
+                logger.warning(f"Не удалось загрузить настройки: {exc}")
+
+    def _save_settings(self):
+        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = {"dark_mode": self._dark_mode}
+            SETTINGS_FILE.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception as exc:
+            logger.warning(f"Не удалось сохранить настройки: {exc}")
+
+    # ── Тема ────────────────────────────────────────────────────────────────
+
+    def _get_colors(self):
+        return DARK_COLORS if self._dark_mode else LIGHT_COLORS
+
+    def _apply_theme(self):
+        colors = self._get_colors()
+        self.root.configure(bg=colors["bg"])
+        self.root.option_add("*Font", (FONT_FAMILY, FONT_SIZE))
+        self.root.option_add("*HighlightThickness", 0)
+        self._apply_theme_to_widgets(colors)
+
+    def _apply_theme_to_widgets(self, colors):
+        for child in self.root.winfo_children():
+            self._theme_widget(child, colors)
+
+    def _theme_widget(self, widget, colors):
+        try:
+            t = type(widget)
+            if t in (tk.Frame, tk.LabelFrame):
+                widget.configure(bg=colors["bg"])
+            elif t is tk.Label:
+                widget.configure(bg=colors["bg"], fg=colors["fg"])
+            elif t is tk.Button:
+                widget.configure(
+                    bg=colors["bg"],
+                    fg=colors["fg"],
+                    activebackground=colors["btn_active_bg"],
+                    activeforeground=colors["fg"],
+                )
+            elif t is tk.Listbox:
+                widget.configure(
+                    bg=colors["bg"],
+                    fg=colors["fg"],
+                    selectbackground=colors["select_bg"],
+                    selectforeground=colors["select_fg"],
+                )
+            elif t in (tk.Text, tk.Entry):
+                widget.configure(
+                    bg=colors["bg"],
+                    fg=colors["fg"],
+                    insertbackground=colors["fg"],
+                )
+            elif t in (tk.Radiobutton, tk.Checkbutton):
+                widget.configure(
+                    bg=colors["bg"],
+                    fg=colors["fg"],
+                    selectcolor=colors["bg"],
+                    activebackground=colors["bg"],
+                    activeforeground=colors["fg"],
+                )
+            elif t is tk.Scrollbar:
+                widget.configure(bg=colors["bg"], troughcolor=colors["bg"])
+            elif t is tk.Menu:
+                widget.configure(bg=colors["bg"], fg=colors["fg"])
+        except tk.TclError:
+            pass
+        for child in widget.winfo_children():
+            self._theme_widget(child, colors)
+
+    def _toggle_theme(self):
+        self._dark_mode = not self._dark_mode
+        self._apply_theme()
+        self._save_settings()
+        self._log(f"Тема: {'тёмная' if self._dark_mode else 'светлая'}")
+
+    # ── Онбординг ───────────────────────────────────────────────────────────
+
+    def _onboarding(self):
+        if FIRST_RUN_FLAG.exists():
+            return
+
+        FIRST_RUN_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        FIRST_RUN_FLAG.write_text("ok", encoding="utf-8")
+
+        self.root.after(500, self._show_onboarding)
+
+    def _show_onboarding(self):
+        win = tk.Toplevel(self.root)
+        win.title("Добро пожаловать в PromptEar!")
+        win.geometry("500x400")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+
+        colors = self._get_colors()
+        win.configure(bg=colors["bg"])
+
+        tk.Label(
+            win,
+            text="PromptEar — транскрибация аудио",
+            font=(FONT_FAMILY, 16, "bold"),
+            bg=colors["bg"],
+            fg=colors["fg"],
+        ).pack(pady=(20, 10))
+
+        msg = (
+            "Что нужно для работы:\n\n"
+            "1. Whisper (распознавание речи) — установится автоматически\n"
+            "2. Ollama + Qwen 2.5 3b — установится через bootstrap.bat\n"
+            "3. FFmpeg — скачайте отдельно: winget install ffmpeg\n\n"
+            "Как пользоваться:\n"
+            "• Перетащите аудиофайлы в окно или нажмите «Обзор»\n"
+            "• Выберите формат: DOCX или TXT\n"
+            "• Нажмите «Обработать»\n\n"
+            "Совет: если у вас NVIDIA — приложение предложит "
+            "установить torch с CUDA для ускорения"
+        )
+        tk.Label(
+            win,
+            text=msg,
+            justify=tk.LEFT,
+            wraplength=460,
+            bg=colors["bg"],
+            fg=colors["fg"],
+            font=(FONT_FAMILY, FONT_SIZE_SMALL),
+        ).pack(pady=(0, 20), padx=20)
+
+        tk.Button(
+            win,
+            text="Начать!",
+            command=win.destroy,
+            bg=colors["btn_active_bg"],
+            fg=colors["fg"],
+            font=(FONT_FAMILY, FONT_SIZE),
+        ).pack(pady=(0, 10))
+
+    # ── GPU ──────────────────────────────────────────────────────────────────
+
+    def _report_gpu(self):
         from utils.gpu import detect_and_report
 
         gpu_info = detect_and_report()
@@ -72,50 +229,55 @@ class PromptEarApp:
             f"torch_cuda={gpu_info['torch_cuda_installed']}, "
             f"device={gpu_info['device']}"
         )
-        if gpu_info["need_install"]:
+        logger.info(f"GPU info: {gpu_info}")
+
+        if not self._ffmpeg_ok:
+            self._log("FFmpeg не найден. Установите: winget install ffmpeg")
+            return
+
+        if gpu_info.get("need_install"):
             self._log("Обнаружена NVIDIA, но torch без CUDA")
-            if messagebox.askyesno(
-                "GPU обнаружена",
-                "Обнаружена видеокарта NVIDIA.\n\n"
-                "Установить torch с CUDA для ускорения?\n"
-                "(Займёт ~2 минуты)",
-            ):
-                self._install_cuda()
-            else:
-                self._log("Установка CUDA отменена, работаю на CPU")
+            self.root.after(1000, self._ask_cuda_install)
         elif gpu_info["has_nvidia_gpu"] and gpu_info["torch_cuda_installed"]:
             self._log("GPU: NVIDIA + CUDA готовы")
         else:
             self._log("GPU: не обнаружена (CPU)")
 
+    def _ask_cuda_install(self):
+        if messagebox.askyesno(
+            "GPU обнаружена",
+            "Обнаружена видеокарта NVIDIA.\n\n"
+            "Установить torch с CUDA для ускорения?\n"
+            "(Займёт ~2 минуты)",
+        ):
+            self._install_cuda()
+        else:
+            self._log("Установка CUDA отменена, работаю на CPU")
+
+    # ── Drag & Drop ─────────────────────────────────────────────────────────
+
+    def _setup_dnd(self):
         if HAS_DND:
             self.root.drop_target_register("DND_Files")
             self.root.dnd_bind("<<Drop>>", self._on_drop)
 
-        self._process_cli_args()
-        self._check_ollama_async()
+    # ── UI ──────────────────────────────────────────────────────────────────
 
-    # ------------------------------------------------------------------
     def _build_ui(self):
-        """Строит интерфейс."""
-        self.root.configure(bg=WHITE)
-        self.root.option_add("*Font", (FONT_FAMILY, FONT_SIZE))
-        self.root.option_add("*HighlightThickness", 0)
+        self.root.title("PromptEar — транскрибация аудио")
+        self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
+        self.root.resizable(False, False)
 
-        main = tk.Frame(self.root, bg=WHITE)
+        main = tk.Frame(self.root)
         main.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # --- Path + Browse ---
-        row_path = tk.Frame(main, bg=WHITE)
+        row_path = tk.Frame(main)
         row_path.pack(fill=tk.X, pady=(0, 6))
 
         self._entry_path = PlaceholderEntry(
             row_path,
             placeholder='выберите папку с аудио: нажмите "Обзор"',
-            bg=WHITE,
-            fg=PH,
-            normal_fg=FG,
-            insertbackground=FG,
             relief=tk.SOLID,
             bd=1,
             font=(FONT_FAMILY, FONT_SIZE),
@@ -126,14 +288,9 @@ class PromptEarApp:
             row_path,
             text="Обзор",
             command=self._on_browse,
-            bg=WHITE,
-            fg=FG,
-            activebackground=BTN_ACTIVE_BG,
-            activeforeground=FG,
             font=(FONT_FAMILY, FONT_SIZE),
             relief=tk.SOLID,
             bd=1,
-            highlightthickness=0,
             padx=12,
             pady=4,
             cursor="hand2",
@@ -141,7 +298,7 @@ class PromptEarApp:
         btn_browse.pack(side=tk.RIGHT)
 
         # --- File list ---
-        frm_list = tk.Frame(main, bg=WHITE, highlightthickness=1, highlightbackground=BORDER)
+        frm_list = tk.Frame(main, highlightthickness=1)
         frm_list.pack(fill=tk.X, pady=(0, 6))
 
         self._listbox = PlaceholderListbox(
@@ -151,36 +308,25 @@ class PromptEarApp:
             selectmode=tk.EXTENDED,
             font=(FONT_FAMILY, FONT_SIZE),
             relief=tk.FLAT,
-            highlightthickness=0,
-            bg=WHITE,
-            fg=PH,
-            normal_fg=FG,
-            selectbackground="#eee",
-            selectforeground=FG,
             borderwidth=0,
         )
         self._listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         scroll_files = tk.Scrollbar(
-            frm_list,
-            orient=tk.VERTICAL,
-            command=self._listbox.yview,
-            bg=WHITE,
-            troughcolor=WHITE,
-            bd=1,
-            relief=tk.SOLID,
+            frm_list, orient=tk.VERTICAL, command=self._listbox.yview, bd=1, relief=tk.SOLID
         )
         scroll_files.pack(side=tk.RIGHT, fill=tk.Y)
         self._listbox.config(yscrollcommand=scroll_files.set)
 
         self._listbox.bind("<Delete>", self._remove_selected)
+        self._listbox.bind("<Button-3>", self._show_list_menu)
+
         if HAS_DND:
             self._listbox.drop_target_register("DND_Files")  # type: ignore[attr-defined]
             self._listbox.dnd_bind("<<Drop>>", self._on_drop)  # type: ignore[attr-defined]
-        self._listbox.bind("<Button-3>", self._show_list_menu)
 
         # --- Context ---
-        frm_ctx = tk.Frame(main, bg=WHITE, highlightthickness=1, highlightbackground=BORDER)
+        frm_ctx = tk.Frame(main, highlightthickness=1)
         frm_ctx.pack(fill=tk.X, pady=(0, 4))
 
         self._text_prompt = tk.Text(
@@ -189,11 +335,8 @@ class PromptEarApp:
             wrap=tk.WORD,
             font=(FONT_FAMILY, FONT_SIZE),
             relief=tk.FLAT,
-            highlightthickness=0,
-            bg=WHITE,
-            fg=PH,
             borderwidth=0,
-            insertbackground=FG,
+            insertbackground="#222",
         )
         self._text_prompt.insert("1.0", "контекст (тема, имена, термины)")
         self._text_prompt.pack(fill=tk.X)
@@ -201,8 +344,8 @@ class PromptEarApp:
         self._text_prompt.bind("<FocusOut>", self._on_prompt_blur)
         self._text_prompt.bind("<Button-3>", self._show_text_menu)
 
-        # --- Format + multi-pass + button ---
-        row_fmt = tk.Frame(main, bg=WHITE)
+        # --- Format + multi-pass + dark toggle + button ---
+        row_fmt = tk.Frame(main)
         row_fmt.pack(fill=tk.X, pady=(0, 4))
 
         self._var_format = tk.StringVar(value="docx")
@@ -212,11 +355,6 @@ class PromptEarApp:
                 text=fmt.upper(),
                 variable=self._var_format,
                 value=fmt,
-                bg=WHITE,
-                fg=FG,
-                selectcolor=WHITE,
-                activebackground=WHITE,
-                activeforeground=FG,
                 font=(FONT_FAMILY, FONT_SIZE),
             )
             rb.pack(side=tk.LEFT, padx=(0, 10))
@@ -226,27 +364,29 @@ class PromptEarApp:
             row_fmt,
             text="Многопроходное улучшение текста",
             variable=self._var_multi_pass,
-            bg=WHITE,
-            fg=FG,
-            selectcolor=WHITE,
-            activebackground=WHITE,
-            activeforeground=FG,
             font=(FONT_FAMILY, FONT_SIZE),
         )
         cb_multipass.pack(side=tk.LEFT, padx=(20, 0))
+
+        btn_theme = tk.Button(
+            row_fmt,
+            text="🌙",
+            command=self._toggle_theme,
+            font=(FONT_FAMILY, FONT_SIZE),
+            relief=tk.FLAT,
+            bd=0,
+            padx=4,
+            cursor="hand2",
+        )
+        btn_theme.pack(side=tk.LEFT, padx=(10, 0))
 
         self._btn_run = tk.Button(
             row_fmt,
             text="Обработать",
             command=self._on_run,
-            bg=WHITE,
-            fg=FG,
-            activebackground=BTN_ACTIVE_BG,
-            activeforeground=FG,
             font=(FONT_FAMILY, FONT_SIZE),
             relief=tk.SOLID,
             bd=1,
-            highlightthickness=0,
             padx=12,
             pady=4,
             cursor="hand2",
@@ -254,15 +394,13 @@ class PromptEarApp:
         self._btn_run.pack(side=tk.RIGHT)
 
         # --- Progress ---
-        row_progress = tk.Frame(main, bg=WHITE)
+        row_progress = tk.Frame(main)
         row_progress.pack(fill=tk.X, pady=(2, 4))
 
         self._spinner_label = tk.Label(
             row_progress,
             text="",
             anchor=tk.W,
-            bg=WHITE,
-            fg=COLORS["spinner"],
             font=(FONT_FAMILY, FONT_SIZE_SMALL),
         )
         self._spinner_label.pack(side=tk.LEFT)
@@ -271,14 +409,12 @@ class PromptEarApp:
             row_progress,
             text="",
             anchor=tk.E,
-            bg=WHITE,
-            fg=COLORS["status"],
             font=(FONT_FAMILY, FONT_SIZE_SMALL),
         )
         self._status_label.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(10, 0))
 
         # --- Log ---
-        frm_log = tk.Frame(main, bg=WHITE, highlightthickness=1, highlightbackground=BORDER)
+        frm_log = tk.Frame(main, highlightthickness=1)
         frm_log.pack(fill=tk.BOTH, expand=True)
 
         self._text_log = tk.Text(
@@ -288,35 +424,28 @@ class PromptEarApp:
             state=tk.DISABLED,
             font=(FONT_FAMILY, FONT_SIZE_SMALL),
             relief=tk.FLAT,
-            highlightthickness=0,
-            bg=WHITE,
-            fg=FG,
             borderwidth=0,
-            insertbackground=FG,
+            insertbackground="#222",
         )
         self._text_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         scroll_log = tk.Scrollbar(
-            frm_log,
-            orient=tk.VERTICAL,
-            command=self._text_log.yview,
-            bg=WHITE,
-            troughcolor=WHITE,
-            bd=1,
-            relief=tk.SOLID,
+            frm_log, orient=tk.VERTICAL, command=self._text_log.yview, bd=1, relief=tk.SOLID
         )
         scroll_log.pack(side=tk.RIGHT, fill=tk.Y)
         self._text_log.config(yscrollcommand=scroll_log.set)
 
-    # ------------------------------------------------------------------
+    # ── Лог ─────────────────────────────────────────────────────────────────
+
     def _log(self, message: str):
-        """Добавляет сообщение в лог."""
         self._text_log.config(state=tk.NORMAL)
         self._text_log.insert(tk.END, message + "\n")
         self._text_log.see(tk.END)
         self._text_log.config(state=tk.DISABLED)
+        logger.info(message)
 
-    # ------------------------------------------------------------------
+    # ── Спиннер ─────────────────────────────────────────────────────────────
+
     def _start_spinner(self, text=""):
         self._spinner_running = True
         self._status_label.config(text=text)
@@ -338,24 +467,18 @@ class PromptEarApp:
         self._spinner_job = self.root.after(120, self._animate_spinner)
 
     def _set_progress_text(self, text: str):
-        """Обновляет текст статуса (не останавливая анимацию)."""
         self._status_label.config(text=text)
 
-    # ------------------------------------------------------------------
     def _set_busy(self, busy: bool, label: str = ""):
-        """Переключает состояние интерфейса: занят / свободен."""
-        state = tk.DISABLED if busy else tk.NORMAL
-        self._btn_run.config(state=state)  # type: ignore[call-overload]
+        self._btn_run.config(state="disabled" if busy else "normal")
         if busy:
             self._start_spinner(label)
         else:
             self._stop_spinner()
 
-    # ------------------------------------------------------------------
-    # Обработчики UI
-    # ------------------------------------------------------------------
+    # ── Обработчики UI ─────────────────────────────────────────────────────
+
     def _on_browse(self):
-        """Обработчик кнопки 'Обзор папки'."""
         folder = filedialog.askdirectory(title="Выберите папку с аудиофайлами")
         if not folder:
             return
@@ -363,13 +486,11 @@ class PromptEarApp:
         self._add_files([folder])
 
     def _on_stop(self):
-        """Остановка обработки."""
         self._cancel = True
         self._btn_run.config(text="Остановка...", state=tk.DISABLED)
         self._log("Остановка после текущего файла...")
 
     def _on_drop(self, event):
-        """Обработчик drag-and-drop."""
         raw = event.data
         if not raw:
             return
@@ -381,21 +502,18 @@ class PromptEarApp:
         self._add_files(files)
 
     def _remove_selected(self, event=None):
-        """Удаляет выделенные файлы из списка."""
         selected = self._listbox.curselection()
         for i in reversed(selected):
             self._listbox.delete(i)
         self._listbox._show_placeholder()
 
     def _show_list_menu(self, event):
-        """Контекстное меню для списка файлов."""
         menu = tk.Menu(self.root, tearoff=0, font=(FONT_FAMILY, FONT_SIZE))
         menu.add_command(label="Удалить", command=self._remove_selected)
         menu.add_command(label="Очистить всё", command=self._listbox.clear)
         menu.tk_popup(event.x_root, event.y_root)
 
     def _show_text_menu(self, event):
-        """Контекстное меню для поля контекста."""
         menu = tk.Menu(self.root, tearoff=0, font=(FONT_FAMILY, FONT_SIZE))
         menu.add_command(label="Копировать", command=self._copy_text)
         menu.add_command(label="Вырезать", command=self._cut_text)
@@ -403,7 +521,6 @@ class PromptEarApp:
         menu.tk_popup(event.x_root, event.y_root)
 
     def _copy_text(self):
-        """Копирует выделенный текст."""
         try:
             text = self._text_prompt.get("sel.first", "sel.last")
             self.root.clipboard_clear()
@@ -412,13 +529,11 @@ class PromptEarApp:
             pass
 
     def _cut_text(self):
-        """Вырезает выделенный текст."""
         self._copy_text()
         with contextlib.suppress(tk.TclError):
             self._text_prompt.delete("sel.first", "sel.last")
 
     def _paste_text(self):
-        """Вставляет текст из буфера."""
         try:
             text = self.root.clipboard_get()
             self._text_prompt.insert("insert", text)
@@ -426,23 +541,19 @@ class PromptEarApp:
             pass
 
     def _on_prompt_focus(self, event):
-        """Убирает плейсхолдер при фокусе."""
         if self._text_prompt.get("1.0", "end-1c") == "контекст (тема, имена, термины)":
             self._text_prompt.delete("1.0", tk.END)
-            self._text_prompt.config(fg=FG)
+            self._text_prompt.config(fg="#222")
 
     def _on_prompt_blur(self, event):
-        """Возвращает плейсхолдер, если поле пустое."""
         if not self._text_prompt.get("1.0", "end-1c").strip():
             self._text_prompt.delete("1.0", tk.END)
             self._text_prompt.insert("1.0", "контекст (тема, имена, термины)")
-            self._text_prompt.config(fg=PH)
+            self._text_prompt.config(fg="#aaa")
 
-    # ------------------------------------------------------------------
-    # Работа с файлами
-    # ------------------------------------------------------------------
+    # ── Работа с файлами ───────────────────────────────────────────────────
+
     def _add_files(self, paths):
-        """Добавляет пути в список для обработки."""
         files = find_audio_files(paths)
         if not files:
             self._log("Не найдено аудиофайлов в указанных путях")
@@ -460,7 +571,6 @@ class PromptEarApp:
                 break
 
     def _process_cli_args(self):
-        """Обрабатывает файлы, переданные через аргументы командной строки."""
         args = sys.argv[1:]
         if not args:
             return
@@ -468,12 +578,9 @@ class PromptEarApp:
         if files:
             self._add_files(files)
 
-    # ------------------------------------------------------------------
-    # Ollama
-    # ------------------------------------------------------------------
-    def _check_ollama_async(self):
-        """Проверяет доступность Ollama и модели Qwen в фоне."""
+    # ── Ollama ──────────────────────────────────────────────────────────────
 
+    def _check_ollama_async(self):
         def check():
             ok, model = self._enhancer.is_available()
             if ok and model:
@@ -486,7 +593,6 @@ class PromptEarApp:
         threading.Thread(target=check, daemon=True).start()
 
     def _install_ollama(self):
-        """Скачивает и устанавливает Ollama."""
         self._log("Скачивание Ollama...")
         self._set_busy(True, "Установка Ollama...")
 
@@ -499,14 +605,13 @@ class PromptEarApp:
                 self._enhancer.install(progress_callback=on_progress)
                 self._queue.put((QueueMsg.OLLAMA_READY, (True, True)))
             except Exception as exc:
-                self._queue.put((QueueMsg.LOG, f"Ошибка установки Ollama: {exc}"))
-                self._queue.put((QueueMsg.LOG, "  Попробуйте: winget install Ollama"))
+                self._log(f"Ошибка установки Ollama: {exc}")
+                self._log("  Попробуйте: winget install Ollama")
                 self._queue.put((QueueMsg.OLLAMA_READY, (False, False)))
 
         threading.Thread(target=install, daemon=True).start()
 
     def _install_cuda(self):
-        """Устанавливает torch с поддержкой CUDA."""
         self._log("Установка torch с CUDA...")
         self._set_busy(True, "Установка CUDA...")
 
@@ -546,11 +651,15 @@ class PromptEarApp:
 
         threading.Thread(target=install, daemon=True).start()
 
-    # ------------------------------------------------------------------
-    # Основная обработка
-    # ------------------------------------------------------------------
+    # ── Основная обработка ──────────────────────────────────────────────────
+
+    def _human_error(self, error_text: str) -> str:
+        for pattern, msg in ERROR_MESSAGES.items():
+            if pattern.lower() in error_text.lower():
+                return msg
+        return error_text
+
     def _on_run(self):
-        """Запускает транскрибацию в фоновом потоке."""
         if self._running:
             return
 
@@ -561,7 +670,8 @@ class PromptEarApp:
 
         if not self._ffmpeg_ok:
             messagebox.showerror(
-                "ffmpeg не найден", "Для работы required ffmpeg.\nУстановите: winget install ffmpeg"
+                "ffmpeg не найден",
+                "Для работы требуется ffmpeg.\nУстановите: winget install ffmpeg",
             )
             return
 
@@ -571,11 +681,12 @@ class PromptEarApp:
         qwen_available = self._enhancer._model_ok
 
         self._log(f"Начинаю обработку {len(files)} файлов (формат: {output_fmt.upper()})")
+        logger.info(f"Обработка {len(files)} файлов, формат={output_fmt}, Qwen={qwen_available}")
         if qwen_available:
             self._log("Улучшение через Qwen 2.5 3b включено")
         self._cancel = False
         self._btn_run.config(text="Остановить", command=self._on_stop)
-        self._set_busy(True, "Загрузка модели Whisper large-v3...")
+        self._set_busy(True, "Загрузка модели Whisper...")
         self._btn_run.config(state=tk.NORMAL)
 
         def worker():
@@ -622,11 +733,7 @@ class PromptEarApp:
                     else:
                         audio_to_transcribe = filepath
 
-                    kwargs = {
-                        "language": "ru",
-                        "task": "transcribe",
-                        "verbose": True,
-                    }
+                    kwargs = {"language": "ru", "task": "transcribe", "verbose": True}
                     if initial_prompt:
                         kwargs["initial_prompt"] = initial_prompt
 
@@ -707,15 +814,17 @@ class PromptEarApp:
                     self._queue.put((QueueMsg.DONE, f"Готово. Обработано {len(files)} файлов."))
 
             except Exception as exc:
-                self._queue.put((QueueMsg.ERROR, f"Ошибка: {exc}"))
+                human = self._human_error(str(exc))
+                self._queue.put((QueueMsg.ERROR, f"Ошибка: {human}"))
+                logger.error(f"Ошибка обработки: {exc}", exc_info=True)
             finally:
                 self._running = False
 
         threading.Thread(target=worker, daemon=True).start()
 
-    # ------------------------------------------------------------------
+    # ── Очередь сообщений ──────────────────────────────────────────────────
+
     def _check_queue(self):
-        """Периодически проверяет очередь сообщений от фонового потока."""
         try:
             while True:
                 msg_type, msg = self._queue.get_nowait()
@@ -747,7 +856,9 @@ class PromptEarApp:
                         self._log("Qwen 2.5 3b: доступна — текст будет улучшаться автоматически")
                     elif ok and not model:
                         self._enhancer._ollama_ok = True
-                        self._log("Qwen 2.5 3b: модель не скачана")
+                        self._log(
+                            "Qwen 2.5 3b: модель не скачана. Запустите: ollama pull qwen2.5:3b"
+                        )
                     else:
                         self._log("Ollama не найдена. Улучшение текста будет пропущено.")
                         if messagebox.askyesno(
@@ -769,15 +880,13 @@ class PromptEarApp:
         finally:
             self.root.after(QUEUE_POLL_MS, self._check_queue)
 
-    # ------------------------------------------------------------------
-    def _restart_app(self):
-        """Перезапускает приложение."""
-        import sys
+    # ── Перезапуск ──────────────────────────────────────────────────────────
 
+    def _restart_app(self):
         python = sys.executable
         os.execl(python, python, *sys.argv)
 
-    # ------------------------------------------------------------------
+    # ── Запуск ──────────────────────────────────────────────────────────────
+
     def run(self):
-        """Запускает главный цикл."""
         self.root.mainloop()
