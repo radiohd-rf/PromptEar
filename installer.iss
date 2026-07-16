@@ -52,10 +52,8 @@ Filename: "{app}\bootstrap.bat"; StatusMsg: "Установка Python + биб�
 Filename: "{app}\run.bat"; Description: "Запустить PromptEar"; Flags: postinstall nowait skipifsilent shellexec
 
 [UninstallRun]
-; Закрываем PromptEar перед удалением
-Filename: "{cmd}"; Parameters: "/C taskkill /f /im python.exe 2>nul"; Flags: runascurrentuser shellexec
-; Удаляем кеш моделей Whisper
-Filename: "{cmd}"; Parameters: "/C if exist ""%USERPROFILE%\.cache\whisper"" rmdir /s /q ""%USERPROFILE%\.cache\whisper"""; Flags: shellexec
+; Умное удаление: выбор компонентов (через uninstall.bat --silent — по умолчанию: программа + кеш + настройки)
+Filename: "{app}\uninstall.bat"; Parameters: "--silent"; Flags: runascurrentuser shellexec waituntilterminated
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\run.bat"; WorkingDir: "{app}"
