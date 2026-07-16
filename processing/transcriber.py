@@ -1,6 +1,6 @@
 """Транскрипция аудио через Whisper."""
 
-import importlib
+import importlib.util
 import os
 import re
 import subprocess

@@ -15,10 +15,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: Сборка main.py
+:: Сборка main.py (лёгкая — без torch/whisper/scipy, они ставятся отдельно)
 echo [2/3] Сборка PromptEar.exe...
 python -m PyInstaller ^
-    --onefile ^
+    --onedir ^
     --windowed ^
     --name PromptEar ^
     --noconfirm ^
@@ -27,11 +27,14 @@ python -m PyInstaller ^
     --add-data "processing;processing" ^
     --add-data "utils;utils" ^
     --add-data "ui;ui" ^
-    --hidden-import whisper ^
-    --hidden-import torch ^
+    --hidden-import tkinterdnd2 ^
     --hidden-import docx ^
     --hidden-import requests ^
-    --hidden-import tkinterdnd2 ^
+    --hidden-import pydub ^
+    --exclude-module torch ^
+    --exclude-module whisper ^
+    --exclude-module numpy ^
+    --exclude-module scipy ^
     main.py
 if errorlevel 1 (
     echo Ошибка при сборке.

@@ -1,7 +1,7 @@
 """PromptEar — главное окно приложения."""
 
 import contextlib
-import importlib
+import importlib.util
 import os
 import queue
 import shutil

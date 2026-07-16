@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PromptEar — точка входа."""
 
-import importlib
+import importlib.util
 import subprocess
 import tkinter as tk
 

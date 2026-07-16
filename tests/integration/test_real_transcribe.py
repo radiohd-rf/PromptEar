@@ -20,7 +20,7 @@ def test_real_transcribe(sample_audio_path):
     if not sample_audio_path.exists():
         pytest.skip(f"test_10s.wav not found at {sample_audio_path}")
 
-    import importlib
+    import importlib.util
 
     if importlib.util.find_spec("whisper") is None:
         pytest.skip("whisper not installed")
@@ -40,7 +40,7 @@ def test_real_transcribe_with_enhancement(sample_audio_path, tmp_path):
     if not sample_audio_path.exists():
         pytest.skip(f"test_10s.wav not found at {sample_audio_path}")
 
-    import importlib
+    import importlib.util
 
     if importlib.util.find_spec("whisper") is None:
         pytest.skip("whisper not installed")
@@ -68,7 +68,7 @@ def test_real_transcribe_save_txt(sample_audio_path, tmp_path):
     if not sample_audio_path.exists():
         pytest.skip(f"test_10s.wav not found at {sample_audio_path}")
 
-    import importlib
+    import importlib.util
 
     if importlib.util.find_spec("whisper") is None:
         pytest.skip("whisper not installed")
