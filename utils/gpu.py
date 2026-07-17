@@ -7,19 +7,29 @@ from config import NVIDIA_SMI_TIMEOUT
 
 
 def has_nvidia_gpu() -> bool:
-    """Проверяет наличие NVIDIA GPU через nvidia-smi."""
+    """Проверяет наличие NVIDIA GPU через nvidia-smi или wmic."""
     nvidia_smi = shutil.which("nvidia-smi")
-    if not nvidia_smi:
-        return False
+    if nvidia_smi:
+        try:
+            result = subprocess.run(
+                [nvidia_smi, "--query-gpu=name", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=NVIDIA_SMI_TIMEOUT,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return True
+        except (subprocess.TimeoutExpired, Exception):
+            pass
     try:
         result = subprocess.run(
-            [nvidia_smi, "--query-gpu=name", "--format=csv,noheader"],
+            ["wmic", "path", "win32_videocontroller", "get", "name"],
             capture_output=True,
             text=True,
-            timeout=NVIDIA_SMI_TIMEOUT,
+            timeout=5,
         )
-        return result.returncode == 0 and bool(result.stdout.strip())
-    except (subprocess.TimeoutExpired, Exception):
+        return "nvidia" in result.stdout.lower()
+    except Exception:
         return False
 
 
@@ -48,7 +58,7 @@ def torch_has_cuda() -> bool:
 def get_install_command() -> str:
     """Возвращает команду установки torch."""
     if has_nvidia_gpu():
-        return "pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121"
+        return "pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126"
     return "pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu"
 
 

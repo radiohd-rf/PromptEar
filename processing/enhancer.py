@@ -9,10 +9,12 @@ import time
 import requests
 
 from config import (
+    ENHANCER_CHUNK_SIZE,
     MULTI_PASS_MAX_RATIO,
     MULTI_PASS_MIN_RATIO,
     OLLAMA_BASE_URL,
     OLLAMA_MODEL,
+    OLLAMA_NUM_PREDICT,
     OLLAMA_TEMPERATURE,
     OLLAMA_TIMEOUT,
 )
@@ -104,11 +106,28 @@ class OllamaEnhancer:
 
     # ── 3-проходная система ───────────────────────────────────────────────
 
+    @staticmethod
+    def _chunk_text(text: str, max_size: int) -> list[str]:
+        """Режет текст на чанки по границам предложений, каждый ≤ max_size символов."""
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        chunks, current, curr_len = [], [], 0
+        for sent in sentences:
+            sent = sent.strip()
+            if not sent:
+                continue
+            if current and curr_len + len(sent) > max_size:
+                chunks.append(' '.join(current))
+                current, curr_len = [], 0
+            current.append(sent)
+            curr_len += len(sent)
+        if current:
+            chunks.append(' '.join(current))
+        return chunks or [text]
+
     def enhance_multi_pass(self, text: str, topic: str = "", progress_callback=None) -> str:
         """3-проходное улучшение: очистка → стиль → структура.
 
-        Если какой-то проход не удался (ошибка / таймаут / пустой ответ),
-        используется результат предыдущего прохода.
+        Длинные тексты дробятся на чанки, каждый обрабатывается независимо.
         """
         if not text.strip():
             return text
@@ -116,31 +135,39 @@ class OllamaEnhancer:
         if not topic:
             topic = detect_topic(text)
 
-        current = self._protect_speakers(text)
-
+        chunks = self._chunk_text(text, ENHANCER_CHUNK_SIZE)
         passes = [
             ("pass1", self._pass_cleanup),
             ("pass2", self._pass_style),
             ("pass3", self._pass_structure),
         ]
 
-        for name, pass_fn in passes:
-            if progress_callback:
-                progress_callback(f"Проход {name[4:]}/3: {PASS_LABELS.get(name, name)}")
-            try:
-                result = pass_fn(current, topic)
-                if self._result_too_short(result, current):
-                    if progress_callback:
-                        progress_callback(
-                            "  Результат слишком короткий (<60% длины), сохранён предыдущий"
-                        )
-                else:
-                    current = result
-            except Exception:
-                if progress_callback:
-                    progress_callback(f"  Ошибка на проходе {name[4:]}, сохранён предыдущий")
+        processed = []
+        for idx, chunk in enumerate(chunks):
+            chunk = self._protect_speakers(chunk)
 
-        return self._restore_speakers(current)
+            for name, pass_fn in passes:
+                label = f"Проход {name[4:]}/3: {PASS_LABELS.get(name, name)}"
+                if len(chunks) > 1:
+                    label = f"Чанк {idx+1}/{len(chunks)}: {label}"
+                if progress_callback:
+                    progress_callback(label)
+                try:
+                    result = pass_fn(chunk, topic)
+                    if self._result_too_short(result, chunk):
+                        if progress_callback:
+                            progress_callback(
+                                "  Результат слишком короткий (<60% длины), сохранён предыдущий"
+                            )
+                    else:
+                        chunk = result
+                except Exception:
+                    if progress_callback:
+                        progress_callback(f"  Ошибка на проходе {name[4:]}, сохранён предыдущий")
+
+            processed.append(self._restore_speakers(chunk))
+
+        return "\n\n".join(processed)
 
     # ── Отдельные проходы ──────────────────────────────────────────────────
 
@@ -150,6 +177,7 @@ class OllamaEnhancer:
             "model": self.model,
             "prompt": prompt,
             "temperature": OLLAMA_TEMPERATURE,
+            "num_predict": OLLAMA_NUM_PREDICT,
             "stream": False,
         }
         r = requests.post(

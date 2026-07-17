@@ -21,16 +21,23 @@ def ensure_deps():
         missing.append("openai-whisper")
 
     if missing:
+        python = sys.executable
         logger.info(f"Установка зависимостей: {', '.join(missing)}")
-        print(f"Установка: {', '.join(missing)}...")
+        if sys.stdout:
+            print(f"Установка: {', '.join(missing)}...")
         if "torch" in missing:
             subprocess.run(
-                "pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu",
-                shell=True,
-                timeout=300,
+                [python, "-m", "pip", "install", "--quiet", "torch", "torchaudio",
+                 "--index-url", "https://download.pytorch.org/whl/cu126",
+                 "--trusted-host", "download.pytorch.org",
+                 "torch==2.11.0+cu126", "torchaudio==2.11.0+cu126"],
+                timeout=300, creationflags=subprocess.CREATE_NO_WINDOW,
             )
         if "openai-whisper" in missing:
-            subprocess.run("pip install openai-whisper", shell=True, timeout=300)
+            subprocess.run(
+                [python, "-m", "pip", "install", "--quiet", "openai-whisper"],
+                timeout=300, creationflags=subprocess.CREATE_NO_WINDOW,
+            )
 
 
 ensure_deps()

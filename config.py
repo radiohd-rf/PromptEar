@@ -41,6 +41,8 @@ DARK_COLORS = {
     "error_fg": "#ff6b6b",
 }
 
+COLORS = dict(LIGHT_COLORS)  # рабочая копия, не трогаем шаблон
+
 FONT_FAMILY = "Segoe UI"
 FONT_SIZE = 12
 FONT_SIZE_SMALL = 11
@@ -72,17 +74,19 @@ OLLAMA_TEMPERATURE = 0.0
 # ── Multi-pass enhancement ──────────────────────────────────────────────────
 MULTI_PASS_MIN_RATIO = 0.6
 MULTI_PASS_MAX_RATIO = 1.4
+OLLAMA_NUM_PREDICT = -1          # unlimited output tokens
+ENHANCER_CHUNK_SIZE = 3000       # symbols per chunk for long texts
 
 # ── GPU ─────────────────────────────────────────────────────────────────────
 NVIDIA_SMI_TIMEOUT = 5
 
-# ── User-friendly error map ─────────────────────────────────────────────────
+# ── Error messages ──────────────────────────────────────────────────────────
 ERROR_MESSAGES = {
-    "No module named 'whisper'": "Библиотека Whisper не установлена. Запустите bootstrap.bat",
-    "No module named 'torch'": "Библиотека Torch не установлена. Запустите bootstrap.bat",
-    "Connection refused": "Ollama не запущена. Запустите Ollama и попробуйте снова",
-    "ConnectionError": "Ollama не отвечает. Проверьте что она запущена",
-    "FFMPEG not found": "ffmpeg не найден. Установите: winget install ffmpeg",
-    "timed out": "Таймаут — операция заняла слишком много времени",
-    "CUDA": "Ошибка CUDA. Попробуйте перезапустить приложение",
+    "ffmpeg": "FFmpeg не найден",
+    "whisper": "Ошибка распознавания речи",
+    "ollama": "Ошибка улучшения текста",
+    "model": "Ошибка загрузки модели",
+    "file": "Ошибка чтения файла",
+    "save": "Ошибка сохранения результата",
+    "unknown": "Неизвестная ошибка",
 }

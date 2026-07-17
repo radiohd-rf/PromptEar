@@ -15,6 +15,7 @@ def detect_quiet_audio(path: Path, queue=None) -> bool:
     Если громкость ниже QUIET_THRESHOLD_DB — возвращает True (нужен усиленный режим).
     """
     try:
+        path = path.resolve()  # resolves junctions, OneDrive reparse points
         cmd = [
             "ffmpeg",
             "-i",
@@ -43,6 +44,7 @@ def detect_quiet_audio(path: Path, queue=None) -> bool:
 
 def preprocess_audio(src_path: Path) -> Path:
     """Компрессия динамического диапазона + конвертация в PREPROCESS_SAMPLE_RATE моно WAV."""
+    src_path = src_path.resolve()
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp_path = Path(tmp.name)
 

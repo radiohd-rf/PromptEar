@@ -1,4 +1,4 @@
-"""Тесты GPU-детекции."""
+"""Tests for GPU detection."""
 
 from unittest.mock import MagicMock
 
@@ -13,7 +13,10 @@ def test_has_nvidia_true(mocker):
 
 
 def test_has_nvidia_false(mocker):
-    mocker.patch("utils.gpu.shutil.which", return_value=None)
+    from subprocess import TimeoutExpired
+
+    mocker.patch("utils.gpu.shutil.which", return_value=r"C:\nvidia-smi.exe")
+    mocker.patch("utils.gpu.subprocess.run", side_effect=TimeoutExpired("cmd", 5))
     assert has_nvidia_gpu() is False
 
 
@@ -69,7 +72,10 @@ def test_detect_and_report_needs_install(mocker):
 
 
 def test_detect_and_report_no_gpu(mocker):
-    mocker.patch("utils.gpu.shutil.which", return_value=None)
+    from subprocess import TimeoutExpired
+
+    mocker.patch("utils.gpu.shutil.which", return_value=r"C:\nvidia-smi.exe")
+    mocker.patch("utils.gpu.subprocess.run", side_effect=TimeoutExpired("cmd", 5))
     mock_torch = MagicMock()
     mock_torch.version.cuda = None
     mock_torch.cuda.is_available.return_value = False

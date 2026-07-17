@@ -1,6 +1,5 @@
 @echo off
-chcp 65001 >nul
-title Удаление PromptEar
+title PromptEar Uninstall
 
 set "APP_DIR=%~dp0"
 set "SILENT="
