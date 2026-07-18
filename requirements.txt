@@ -1,0 +1,7 @@
+# PromptEar — зависимости
+openai-whisper>=20231117
+python-docx>=1.1.0
+requests>=2.28.0
+
+# Опционально: drag-and-drop в GUI
+# pip install tkinterdnd2
