@@ -10,7 +10,6 @@ class QueueMsg(Enum):
     LOG = auto()
     PROGRESS = auto()
     TRANSCRIBING = auto()
-    WHISPER_PROGRESS = auto()
     OLLAMA_READY = auto()
     CUDA_INSTALLED = auto()
     DONE = auto()
@@ -39,16 +38,6 @@ class ProgressEvent(PipelineEvent):
 @dataclass
 class TranscribingEvent(PipelineEvent):
     message: str
-
-
-@dataclass
-class WhisperProgressEvent(PipelineEvent):
-    percent: int
-    current: int
-    total: int
-    elapsed: str
-    remaining: str
-    speed: str
 
 
 @dataclass

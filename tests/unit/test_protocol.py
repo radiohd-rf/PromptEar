@@ -32,10 +32,6 @@ def test_transcribing_exists():
     assert QueueMsg.TRANSCRIBING is not None
 
 
-def test_whisper_progress_exists():
-    assert QueueMsg.WHISPER_PROGRESS is not None
-
-
 def test_ollama_ready_exists():
     assert QueueMsg.OLLAMA_READY is not None
 
@@ -48,8 +44,8 @@ def test_set_busy_exists():
     assert QueueMsg.SET_BUSY is not None
 
 
-def test_ten_messages_total():
-    assert len(QueueMsg) == 10
+def test_nine_messages_total():
+    assert len(QueueMsg) == 9
 
 
 def test_members_are_enum():

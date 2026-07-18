@@ -17,8 +17,8 @@ def ensure_deps():
     missing = []
     if importlib.util.find_spec("torch") is None:
         missing.append("torch")
-    if importlib.util.find_spec("whisper") is None:
-        missing.append("openai-whisper")
+    if importlib.util.find_spec("faster_whisper") is None:
+        missing.append("faster-whisper")
 
     if missing:
         python = sys.executable
@@ -45,9 +45,9 @@ def ensure_deps():
                 timeout=300,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
-        if "openai-whisper" in missing:
+        if "faster-whisper" in missing:
             subprocess.run(
-                [python, "-m", "pip", "install", "--quiet", "openai-whisper"],
+                [python, "-m", "pip", "install", "--quiet", "faster-whisper"],
                 timeout=300,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
