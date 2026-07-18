@@ -65,13 +65,6 @@ PREPROCESS_LOWPASS_FREQ = 8000  # убирает ВЧ-шум (речь 300-4000 
 
 # ── Whisper ─────────────────────────────────────────────────────────────────
 WHISPER_MODEL = "medium"
-WHISPER_LANGUAGE = "ru"
-WHISPER_TEMPERATURE = (0.0, 0.2, 0.4, 0.6)  # fallback: greedy → 3 retries
-WHISPER_COMPRESSION_RATIO_THRESHOLD = 2.4  # default whisper
-WHISPER_LOGPROB_THRESHOLD = -1.0  # default whisper
-WHISPER_NO_SPEECH_THRESHOLD = 0.4  # less false positives on silence (default 0.6)
-WHISPER_HALLUCINATION_SILENCE_THRESHOLD = None  # default whisper (disabled)
-WHISPER_BEST_OF = 3  # candidates when temperature > 0 (было 5)
 
 # ── Ollama / Qwen ───────────────────────────────────────────────────────────
 OLLAMA_BASE_URL = "http://localhost:11434"

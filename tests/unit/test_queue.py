@@ -34,8 +34,6 @@ def _simulate_check_queue(app_mock):
                 app_mock._set_busy(False)
             elif msg_type is QueueMsg.TRANSCRIBING:
                 app_mock._set_progress_text(msg)
-            elif msg_type is QueueMsg.WHISPER_PROGRESS:
-                app_mock._set_progress_text(f"{msg['percent']}%")
             elif msg_type is QueueMsg.OLLAMA_READY:
                 app_mock._enhancer._ollama_ok = msg[0]
             elif msg_type is QueueMsg.ERROR or msg_type is QueueMsg.CANCELLED:
@@ -89,13 +87,6 @@ def test_transcribing_routed(app_mock):
     app_mock._queue.put((QueueMsg.TRANSCRIBING, "Транскрибация: file.mp3"))
     _simulate_check_queue(app_mock)
     app_mock._set_progress_text.assert_called_once_with("Транскрибация: file.mp3")
-
-
-def test_whisper_progress_routed(app_mock):
-    data = {"percent": 50, "current": 5, "total": 10}
-    app_mock._queue.put((QueueMsg.WHISPER_PROGRESS, data))
-    _simulate_check_queue(app_mock)
-    app_mock._set_progress_text.assert_called_once_with("50%")
 
 
 def test_multiple_messages_processed(app_mock):

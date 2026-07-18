@@ -34,7 +34,6 @@ from core.events import (
     QueueMsg,
     SetBusyEvent,
     TranscribingEvent,
-    WhisperProgressEvent,
 )
 from core.installers import CudaInstaller, OllamaInstaller
 from core.models import AudioFile, PipelineConfig
@@ -122,11 +121,6 @@ class PromptEarApp:
             self._set_progress_text(f"[{event.current}/{event.total}] {event.filename} — осталось ~{event.eta}")
         elif isinstance(event, TranscribingEvent):
             self._set_progress_text(event.message)
-        elif isinstance(event, WhisperProgressEvent):
-            self._set_progress_text(
-                f"{event.percent}% | {event.current}/{event.total} "
-                f"[{event.elapsed}<{event.remaining}, {event.speed} frames/s]"
-            )
         elif isinstance(event, SetBusyEvent):
             self._set_busy(event.busy)
         elif isinstance(event, OllamaReadyEvent):

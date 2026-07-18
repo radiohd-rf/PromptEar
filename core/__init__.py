@@ -11,7 +11,6 @@ from core.events import (
     ProgressEvent,
     SetBusyEvent,
     TranscribingEvent,
-    WhisperProgressEvent,
 )
 from core.models import AudioFile, PipelineConfig, TranscriptionResult
 
@@ -23,7 +22,6 @@ __all__ = [
     "LogEvent",
     "ProgressEvent",
     "TranscribingEvent",
-    "WhisperProgressEvent",
     "OllamaReadyEvent",
     "CudaInstalledEvent",
     "DoneEvent",

@@ -7,18 +7,9 @@ import time
 import traceback
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from pathlib import Path
 from threading import Event
 from typing import Any
 
-from config import (
-    WHISPER_BEST_OF,
-    WHISPER_COMPRESSION_RATIO_THRESHOLD,
-    WHISPER_HALLUCINATION_SILENCE_THRESHOLD,
-    WHISPER_LOGPROB_THRESHOLD,
-    WHISPER_NO_SPEECH_THRESHOLD,
-    WHISPER_TEMPERATURE,
-)
 from core.events import (
     CancelledEvent,
     DoneEvent,
@@ -26,7 +17,6 @@ from core.events import (
     LogEvent,
     PipelineEvent,
     ProgressEvent,
-    SetBusyEvent,
     TranscribingEvent,
 )
 from core.models import AudioFile, PipelineConfig, TranscriptionResult
@@ -105,19 +95,13 @@ class TranscribeStep(PipelineStep):
         audio_path = result.audio.preprocessed_path
         kwargs: dict[str, Any] = {
             "language": "ru",
-            "task": "transcribe",
-            "verbose": True,
-            "temperature": WHISPER_TEMPERATURE,
-            "compression_ratio_threshold": WHISPER_COMPRESSION_RATIO_THRESHOLD,
-            "logprob_threshold": WHISPER_LOGPROB_THRESHOLD,
-            "no_speech_threshold": WHISPER_NO_SPEECH_THRESHOLD,
-            "hallucination_silence_threshold": WHISPER_HALLUCINATION_SILENCE_THRESHOLD,
-            "best_of": WHISPER_BEST_OF,
+            "beam_size": 5,
+            "vad_filter": True,
         }
         if config.initial_prompt:
             kwargs["initial_prompt"] = config.initial_prompt
 
-        text = self._transcriber.transcribe(audio_path, queue=None, **kwargs)
+        text = self._transcriber.transcribe(audio_path, **kwargs)
         result.text = text
         emit(LogEvent(f"  Распознано ({len(text)} символов): {result.preview}"))
         return result

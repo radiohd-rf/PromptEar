@@ -173,3 +173,51 @@ def test_result_empty(enhancer):
 
 def test_result_none(enhancer):
     assert enhancer._result_too_short("", "текст") is True
+
+
+# ── Chunking ─────────────────────────────────────────────────────────────────
+
+
+def test_chunk_text_single_chunk(enhancer):
+    text = "Первое предложение. Второе предложение."
+    chunks = enhancer._chunk_text(text, max_size=1000)
+    assert len(chunks) == 1
+    assert chunks[0] == text
+
+
+def test_chunk_text_multiple_chunks(enhancer):
+    text = "Предложение один. Предложение два. Предложение три. Предложение четыре."
+    chunks = enhancer._chunk_text(text, max_size=30)
+    assert len(chunks) >= 2
+
+
+def test_chunk_text_exact_boundary(enhancer):
+    text = "A" * 50 + ". " + "B" * 50 + "."
+    chunks = enhancer._chunk_text(text, max_size=55)
+    assert len(chunks) == 2
+
+
+def test_chunk_text_empty(enhancer):
+    chunks = enhancer._chunk_text("", max_size=100)
+    assert chunks == [""]
+
+
+def test_chunk_text_single_long_sentence(enhancer):
+    text = "A" * 200 + "."
+    chunks = enhancer._chunk_text(text, max_size=100)
+    assert len(chunks) == 1
+    assert chunks[0] == text
+
+
+def test_chunk_text_no_sentence_boundary(enhancer):
+    text = "слово слово слово слово"
+    chunks = enhancer._chunk_text(text, max_size=10)
+    assert chunks == [text]
+
+
+# ── Empty text early return ──────────────────────────────────────────────────
+
+
+def test_enhance_multi_pass_empty_text(enhancer, mocker):
+    result = enhancer.enhance_multi_pass("")
+    assert result == ""
