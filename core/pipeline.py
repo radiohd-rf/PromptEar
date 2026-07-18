@@ -4,6 +4,7 @@
 """
 
 import time
+import traceback
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
@@ -142,26 +143,18 @@ class EnhanceStep(PipelineStep):
         if not result.text or not config.qwen_available:
             return result
 
-        if config.multi_pass:
-            emit(LogEvent("  Многопроходное улучшение Qwen (3 прохода)..."))
-            try:
+        emit(LogEvent("  Многопроходное улучшение Qwen (3 прохода)..."))
+        try:
 
-                def mp_progress(msg: str) -> None:
-                    emit(LogEvent(f"    {msg}"))
+            def mp_progress(msg: str) -> None:
+                emit(LogEvent(f"    {msg}"))
 
-                result.text = self._enhancer.enhance_multi_pass(
-                    result.text, config.initial_prompt or "", progress_callback=mp_progress
-                )
-                emit(LogEvent("  Многопроходное улучшение завершено"))
-            except Exception as exc:
-                emit(LogEvent(f"  Ошибка многопроходного улучшения: {exc}"))
-        else:
-            emit(LogEvent("  Улучшение текста через Qwen..."))
-            try:
-                result.text = self._enhancer.enhance(result.text, config.initial_prompt or "")
-                emit(LogEvent("  Текст улучшен"))
-            except Exception as exc:
-                emit(LogEvent(f"  Ошибка улучшения: {exc}"))
+            result.text = self._enhancer.enhance_multi_pass(
+                result.text, config.initial_prompt or "", progress_callback=mp_progress
+            )
+            emit(LogEvent("  Многопроходное улучшение завершено"))
+        except Exception as exc:
+            emit(LogEvent(f"  Ошибка многопроходного улучшения: {exc}"))
         return result
 
 
@@ -285,7 +278,8 @@ class AudioPipeline:
                 emit(DoneEvent(f"Готово. Обработано {len(files)} файлов."))
 
         except Exception as exc:
-            emit(ErrorEvent(f"Ошибка: {exc}"))
+            tb = traceback.format_exc()
+            emit(ErrorEvent(f"Ошибка: {exc}\n{tb}"))
 
 
 def run_pipeline(

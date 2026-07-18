@@ -36,4 +36,4 @@ cancel = threading.Event
 gh release create vX.Y.Z --title "..." dist/*.exe
 ```
 
-Текущая: **v0.9.0**
+Текущая: **v0.9.1**

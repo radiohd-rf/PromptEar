@@ -2,7 +2,7 @@
 ; Требуется Inno Setup 6+ (https://jrsoftware.org/isdl.php)
 
 #define MyAppName "PromptEar"
-#define MyAppVersion "0.9.0"
+#define MyAppVersion "0.9.1"
 #define MyAppPublisher "PromptEar"
 #define MyAppExeName "run.vbs"
 
@@ -14,7 +14,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=G:\opencode\PromptEar\dist
-OutputBaseFilename=PromptEar_Setup_v0.9.0
+OutputBaseFilename=PromptEar_Setup_v0.9.1
 Compression=lzma2/ultra64
 SolidCompression=yes
 PrivilegesRequired=admin

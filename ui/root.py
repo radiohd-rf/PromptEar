@@ -254,7 +254,7 @@ class PromptEarApp:
         self._text_prompt.bind("<FocusOut>", self._on_prompt_blur)
         self._text_prompt.bind("<Button-3>", self._show_text_menu)
 
-        # Format + multi-pass + button
+        # Format + button
         row_fmt = tk.Frame(main, bg=COLORS["bg"])
         row_fmt.pack(fill=tk.X, pady=(0, 4))
 
@@ -266,15 +266,6 @@ class PromptEarApp:
                 activebackground=COLORS["bg"], activeforeground=COLORS["fg"],
                 font=(FONT_FAMILY, FONT_SIZE),
             ).pack(side=tk.LEFT, padx=(0, 10))
-
-        self._var_multi_pass = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            row_fmt, text="Многопроходное улучшение текста",
-            variable=self._var_multi_pass,
-            bg=COLORS["bg"], fg=COLORS["fg"], selectcolor=COLORS["bg"],
-            activebackground=COLORS["bg"], activeforeground=COLORS["fg"],
-            font=(FONT_FAMILY, FONT_SIZE),
-        ).pack(side=tk.LEFT, padx=(20, 0))
 
         self._btn_run = tk.Button(
             row_fmt, text="Обработать", command=self._on_run,
@@ -534,7 +525,7 @@ class PromptEarApp:
 
         pipeline_config = PipelineConfig(
             output_format=output_fmt,
-            multi_pass=self._var_multi_pass.get(),
+            multi_pass=True,
             initial_prompt=None if raw in ("", "контекст (тема, имена, термины)") else raw,
             qwen_available=qwen_available,
         )
