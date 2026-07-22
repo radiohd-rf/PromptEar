@@ -61,6 +61,10 @@ def _excluded(path: Path, rel: Path) -> bool:
 
 def _pip_download(index_url: str, dest: Path) -> None:
     """Скачивает torch + torchaudio с зависимостями в dest."""
+    # Перенаправляем TEMP на диск сборки (C: может быть мал для torch 2.5 GB)
+    tmpdir = str(dest.parent / "_pip_temp")
+    os.makedirs(tmpdir, exist_ok=True)
+    env = {**os.environ, "TEMP": tmpdir, "TMP": tmpdir}
     cmd = [
         sys.executable,
         "-m",
@@ -76,7 +80,7 @@ def _pip_download(index_url: str, dest: Path) -> None:
         str(dest),
     ]
     print(f"  pip download -> {dest}")
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=env)
     whls = list(dest.glob("*.whl"))
     print(f"  Скачано {len(whls)} wheel-файлов ({sum(f.stat().st_size for f in whls) / 1024 / 1024:.0f} MB)")
 
