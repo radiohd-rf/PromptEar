@@ -31,7 +31,7 @@ logger = get_logger()
 
 WEB_DIR = Path(__file__).resolve().parent
 BASE_DIR = WEB_DIR.parent
-UPLOAD_DIR = BASE_DIR / "_work"
+UPLOAD_DIR = BASE_DIR / "output"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 PORT = int(os.environ.get("PROMPTEAR_PORT", 5000))
@@ -94,7 +94,7 @@ def _process_files(task_id: str) -> None:
         config = PipelineConfig(
             output_format=task.get("output_format", "docx"),
             multi_pass=True,
-            initial_prompt="",
+            initial_prompt=task.get("initial_prompt", "") or None,
             qwen_available=True,
         )
 
@@ -163,7 +163,7 @@ def upload_files():
         "files": all_audio,
         "cancel": None,
         "multi_pass": True,
-        "initial_prompt": "",
+        "initial_prompt": request.form.get("initial_prompt", ""),
         "qwen": True,
         "output_format": request.form.get("output_format", "docx"),
         "output_dir": UPLOAD_DIR,
@@ -232,3 +232,10 @@ def ollama_check():
         return jsonify({"ollama_ok": ollama_ok, "model_ok": model_ok})
     except Exception as exc:
         return jsonify({"ollama_ok": False, "model_ok": False, "error": str(exc)})
+
+
+@app.route("/api/open-output")
+def open_output():
+    import subprocess
+    subprocess.Popen(["explorer", str(UPLOAD_DIR)])
+    return jsonify({"ok": True})
