@@ -1,5 +1,13 @@
 # Чек-лист: Установка и сборка
 
+## 🛠️ Чем проверять
+
+- Командная строка — запускай bootstrap.bat, run.bat, uninstall.bat, смотри вывод
+- Process Explorer — проверь Job Object, python.exe, ffmpeg.exe
+- Проводник — загляни в venv/, wheels/, output/ — всё ли на месте
+- 7-Zip / WinRAR — открой zip после build_zips, проверь структуру
+- Python — `python build_zips.py cpu`, `python build_zips.py cu126`
+
 ## Техники: State Transition, EP, негатив
 
 ### Bootstrap (bootstrap.bat)

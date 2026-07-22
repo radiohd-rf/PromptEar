@@ -1,5 +1,12 @@
 # Чек-лист: REST API
 
+## 🛠️ Чем проверять
+
+- Postman — сделай коллекцию на все эндпоинты, удобно переиспользовать
+- curl — для быстрых проверок, если лень открывать Postman: `curl -X POST -F "files=@test.mp3" http://localhost:5000/api/files`
+- DevTools → Network — смотри заголовки, статусы, тело ответа
+- Postman Runner — отправь 2 POST /api/files одновременно, смотри что будет
+
 ## Техники: EP, BVA, негатив
 
 ### POST /api/files

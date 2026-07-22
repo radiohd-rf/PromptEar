@@ -1,5 +1,12 @@
 # Чек-лист: Формат вывода
 
+## 🛠️ Чем проверять
+
+- Word / LibreOffice — открой docx, смотри абзацы, кириллицу
+- Notepad++ — открой txt, проверь UTF-8 без BOM
+- Проводник — зайди в output/, смотри имена файлов, длинные пути
+- DevTools → Network — output_format в форме
+
 ## Техники: EP, State Transition
 
 ### Выбор формата
