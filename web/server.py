@@ -23,7 +23,8 @@ from core.models import AudioFile, PipelineConfig
 from core.pipeline import run_pipeline as run_pipeline_core
 from processing.enhancer import OllamaEnhancer
 from processing.transcriber import Transcriber
-from utils.files import find_audio_files
+from utils.files import find_supported_files, is_video_file
+from utils.extract_audio import extract_audio
 from utils.gpu import detect_and_report
 from utils.logger import get_logger
 
@@ -155,8 +156,21 @@ def upload_files():
     if not saved:
         return jsonify({"error": "no valid files"}), 400
 
-    # находим аудиофайлы рекурсивно
-    all_audio = [str(p) for p in find_audio_files([Path(p) for p in saved])]
+    # находим все поддерживаемые файлы
+    all_supported = find_supported_files([Path(p) for p in saved])
+
+    # извлекаем аудио из видео
+    for p in list(all_supported):
+        if is_video_file(p):
+            try:
+                wav_path = extract_audio(p)
+                all_supported.remove(p)
+                all_supported.append(wav_path)
+            except (ValueError, RuntimeError) as exc:
+                app.logger.warning(f"Video extraction failed for {p.name}: {exc}")
+                return jsonify({"error": str(exc)}), 400
+
+    all_audio = [str(p) for p in all_supported]
 
     tasks[task_id] = {
         "queue": queue.Queue(maxsize=500),

@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -46,6 +47,7 @@ EXCLUDE_SUFFIXES = {".pyc", ".pyo"}
 EXCLUDE_DIRS = {"__pycache__", ".git", ".github", ".pytest_cache", ".ruff_cache", "__pycache__"}
 
 REQUIRED_PACKAGES = ["torch", "torchaudio"]
+FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 
 
 def _excluded(path: Path, rel: Path) -> bool:
@@ -79,12 +81,35 @@ def _pip_download(index_url: str, dest: Path) -> None:
     print(f"  Скачано {len(whls)} wheel-файлов ({sum(f.stat().st_size for f in whls) / 1024 / 1024:.0f} MB)")
 
 
+def _download_ffmpeg(dest: Path) -> None:
+    """Скачивает ffmpeg.exe и кладёт в dest."""
+    ffmpeg_exe = dest / "ffmpeg.exe"
+    if ffmpeg_exe.exists():
+        print("  ffmpeg.exe уже есть")
+        return
+    print("  Скачивание ffmpeg...")
+    zip_path = dest.parent / "ffmpeg.zip"
+    subprocess.run(
+        ["curl", "-sS", "-L", "-o", str(zip_path), FFMPEG_URL],
+        check=True,
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        with zipfile.ZipFile(str(zip_path), "r") as zf:
+            zf.extractall(tmp)
+        for f in Path(tmp).rglob("ffmpeg.exe"):
+            shutil.copy2(f, ffmpeg_exe)
+            break
+    zip_path.unlink()
+    size_mb = ffmpeg_exe.stat().st_size / 1024 / 1024
+    print(f"  ffmpeg.exe ({size_mb:.0f} MB)")
+
+
 def build_variant(name: str, index_url: str) -> None:
     print(f"\n=== Сборка {name.upper()} ===")
 
     build_dir = ROOT / f"_build_{name}"
     wheels_dir = build_dir / "wheels"
-    zip_path = ROOT / f"PromptEar-v0.10.2-{name}.zip"
+    zip_path = ROOT / f"PromptEar-v0.11.0-{name}.zip"
 
     # Очистка
     if build_dir.exists():
@@ -140,7 +165,10 @@ def build_variant(name: str, index_url: str) -> None:
     else:
         print("  ⚠ csc.exe не найден, лаунчер не скомпилирован")
 
-    # 4. Создать zip
+    # 4. Скачать ffmpeg.exe
+    _download_ffmpeg(build_dir)
+
+    # 5. Создать zip
     print(f"  Создание {zip_path.name}...")
     total = 0
     with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:

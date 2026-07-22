@@ -2,7 +2,28 @@
 
 from pathlib import Path
 
-from config import AUDIO_EXTENSIONS
+from config import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
+
+
+ALL_SUPPORTED = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
+
+
+def is_video_file(path: Path) -> bool:
+    return path.suffix.lower() in VIDEO_EXTENSIONS
+
+
+def find_supported_files(paths: list) -> list[Path]:
+    """Собирает все аудио и видеофайлы из переданных путей."""
+    files = []
+    for path in paths:
+        p = Path(path)
+        if p.is_file() and p.suffix.lower() in ALL_SUPPORTED:
+            files.append(p)
+        elif p.is_dir():
+            for child in sorted(p.iterdir()):
+                if child.is_file() and child.suffix.lower() in ALL_SUPPORTED:
+                    files.append(child)
+    return files
 
 
 def find_audio_files(paths: list) -> list[Path]:
