@@ -186,6 +186,16 @@ function finish() {
   document.getElementById('cancel-btn').style.display = 'none';
 }
 
+/* ── Help modal ─────────────────────────────────────────── */
+
+function openHelp() {
+  document.getElementById('help-overlay').style.display = 'flex';
+}
+
+function closeHelp() {
+  document.getElementById('help-overlay').style.display = 'none';
+}
+
 /* ── UI helpers ──────────────────────────────────────────── */
 
 function addLog(msg) {
@@ -236,3 +246,24 @@ async function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+document.body.addEventListener('dragover', e => e.preventDefault());
+document.body.addEventListener('drop', e => e.preventDefault());
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const overlay = document.getElementById('help-overlay');
+    if (overlay.style.display !== 'none') {
+      closeHelp();
+    }
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const overlay = document.getElementById('help-overlay');
+    if (overlay.style.display !== 'none') {
+      closeHelp();
+    }
+  }
+});

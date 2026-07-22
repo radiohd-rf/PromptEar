@@ -5,6 +5,7 @@ import re
 import subprocess
 import tempfile
 import time
+from threading import Event
 
 import requests
 
@@ -132,7 +133,8 @@ class OllamaEnhancer:
             chunks.append(" ".join(current))
         return chunks or [text]
 
-    def enhance_multi_pass(self, text: str, topic: str = "", progress_callback=None) -> str:
+    def enhance_multi_pass(self, text: str, topic: str = "", progress_callback=None,
+                           cancel: Event | None = None) -> str:
         """3-проходное улучшение: очистка → стиль → структура.
 
         Длинные тексты дробятся на чанки, каждый обрабатывается независимо.
@@ -152,9 +154,13 @@ class OllamaEnhancer:
 
         processed = []
         for idx, chunk in enumerate(chunks):
+            if cancel is not None and cancel.is_set():
+                break
             chunk = self._protect_speakers(chunk)
 
             for name, pass_fn in passes:
+                if cancel is not None and cancel.is_set():
+                    break
                 label = f"Проход {name[4:]}/3: {PASS_LABELS.get(name, name)}"
                 if len(chunks) > 1:
                     label = f"Чанк {idx + 1}/{len(chunks)}: {label}"
@@ -173,6 +179,8 @@ class OllamaEnhancer:
                     if progress_callback:
                         progress_callback(f"  Ошибка на проходе {name[4:]}, сохранён предыдущий")
 
+            if cancel is not None and cancel.is_set():
+                break
             processed.append(self._restore_speakers(chunk))
 
         return "\n\n".join(processed)

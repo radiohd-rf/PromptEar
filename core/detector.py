@@ -2,8 +2,10 @@
 
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable
 from pathlib import Path
+from threading import Event
 
 from config import (
     FFMPEG_TIMEOUT,
@@ -50,7 +52,7 @@ class AudioDetector:
         return False
 
     @staticmethod
-    def preprocess(src_path: Path, quiet: bool = False) -> Path:
+    def preprocess(src_path: Path, quiet: bool = False, cancel: Event | None = None) -> Path:
         """Highpass/lowpass/normalize + 16kHz mono WAV. Для quiet — компрессия."""
         src_path = src_path.resolve()
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -77,6 +79,17 @@ class AudioDetector:
             "1",
             str(tmp_path),
         ]
-        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8",
-                       creationflags=subprocess.CREATE_NO_WINDOW)
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        while proc.poll() is None:
+            if cancel is not None and cancel.is_set():
+                proc.kill()
+                proc.wait()
+                raise RuntimeError("Отменено пользователем")
+            time.sleep(0.25)
+        stdout, stderr = proc.communicate()
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(proc.returncode, cmd, stdout, stderr)
         return tmp_path

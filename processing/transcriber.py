@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from threading import Event
 
 from config import WHISPER_MODEL
 
@@ -53,7 +54,7 @@ class Transcriber:
             return
         threading.Thread(target=self.load_model, args=(model_name,), daemon=True).start()
 
-    def transcribe(self, audio_path: Path, **kwargs) -> str:
+    def transcribe(self, audio_path: Path, cancel: Event | None = None, **kwargs) -> str:
         """Транскрибирует аудиофайл через faster-whisper. Ждёт загрузку модели если нужно."""
         self.load_model()
 
@@ -68,7 +69,12 @@ class Transcriber:
             vad_filter=vad_filter,
             **kwargs,
         )
-        return " ".join(seg.text for seg in segments)
+        parts: list[str] = []
+        for seg in segments:
+            if cancel is not None and cancel.is_set():
+                break
+            parts.append(seg.text)
+        return " ".join(parts)
 
     def unload(self):
         """Выгружает модель из памяти."""

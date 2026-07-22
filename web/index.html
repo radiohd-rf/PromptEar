@@ -12,6 +12,7 @@
   <header>
     <h1>PromptEar</h1>
     <span id="subtitle">транскрибация аудио</span>
+    <span id="help-btn" onclick="openHelp()">?</span>
     <div id="theme-toggle" onclick="toggleTheme()">☀️</div>
   </header>
 
@@ -56,6 +57,32 @@
       <div id="log"></div>
     </div>
   </main>
+
+  <!-- Help modal -->
+  <div id="help-overlay" class="modal-overlay" onclick="closeHelp()" style="display:none">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2>PromptEar — инструкция</h2>
+        <span class="modal-close" onclick="closeHelp()">✕</span>
+      </div>
+      <div class="modal-body">
+        <h3>📥 Как добавить файлы</h3>
+        <p>Перетащите файлы в окно или нажмите «Выбрать файлы». Можно загружать аудио (MP3, WAV, M4A и др.) и видео (MP4, AVI, MKV и др.).</p>
+        <h3>📝 Контекст (необязательно)</h3>
+        <p>Напишите тему разговора, имена людей или сложные термины — программа распознает их точнее.</p>
+        <h3>⚙️ Формат</h3>
+        <p>DOCX — красиво оформленный документ. TXT — обычный текст.</p>
+        <h3>▶️ Что происходит после нажатия «Обработать»</h3>
+        <p>Программа по очереди: 1) подготовит звук, 2) распознает речь через Whisper, 3) улучшит текст через Qwen, 4) сохранит результат.</p>
+        <h3>⛔ Как отменить</h3>
+        <p>Нажмите «Отмена» — программа сразу остановится. Результаты уже готовых файлов сохранятся.</p>
+        <h3>📂 Где найти результат</h3>
+        <p>В папке <code>output/</code> рядом с программой. Кнопка «📁 Открыть папку» откроет её.</p>
+        <h3>ℹ️ Статус-бар</h3>
+        <p>Снизу показано, работает ли программа на видеокарте (GPU) и найден ли Ollama с моделью Qwen.</p>
+      </div>
+    </div>
+  </div>
 
   <footer>
     <span id="gpu-status"></span>
