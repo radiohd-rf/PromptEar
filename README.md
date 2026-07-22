@@ -7,6 +7,8 @@
 
 > Устали вручную расшифровывать интервью или переслушивать лекции?  
 > PromptEar делает это за вас — полностью локально, за пару кликов.
+>
+> **Скачать:** [CPU (GitHub Releases)](https://github.com/radiohd-rf/PromptEar/releases/latest) · [GPU (Яндекс.Диск)](https://disk.yandex.ru/d/7YLfrrD35gmoxQ)
 
 ## Демонстрация
 
