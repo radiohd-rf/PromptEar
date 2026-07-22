@@ -65,7 +65,7 @@ class DetectPreprocessStep(PipelineStep):
 
         emit(LogEvent("  Предобработка (фильтрация + нормализация)..."))
         try:
-            preproc_path = AudioDetector.preprocess(filepath, quiet=whisper_mode)
+            preproc_path = AudioDetector.preprocess(filepath, quiet=whisper_mode, cancel=cancel)
             result.audio.preprocessed = True
         except Exception as exc:
             emit(LogEvent(f"  Ошибка предобработки: {exc}, работаю с оригиналом"))
@@ -101,7 +101,7 @@ class TranscribeStep(PipelineStep):
         if config.initial_prompt:
             kwargs["initial_prompt"] = config.initial_prompt
 
-        text = self._transcriber.transcribe(audio_path, **kwargs)
+        text = self._transcriber.transcribe(audio_path, cancel=cancel, **kwargs)
         result.text = text
         emit(LogEvent(f"  Распознано ({len(text)} символов): {result.preview}"))
         return result
@@ -134,7 +134,7 @@ class EnhanceStep(PipelineStep):
                 emit(LogEvent(f"    {msg}"))
 
             result.text = self._enhancer.enhance_multi_pass(
-                result.text, config.initial_prompt or "", progress_callback=mp_progress
+                result.text, config.initial_prompt or "", progress_callback=mp_progress, cancel=cancel
             )
             emit(LogEvent("  Многопроходное улучшение завершено"))
         except Exception as exc:
@@ -160,7 +160,7 @@ class SaveStep(PipelineStep):
             emit(LogEvent(f"{result.audio.path.name} — пустой результат"))
             return result
 
-        filepath = result.audio.path
+        filepath = result.audio.original_path or result.audio.path
         out_path = filepath.with_suffix(f".{config.output_format}")
         if config.output_format == "txt":
             save_txt(out_path, result.text)

@@ -47,3 +47,8 @@ _tmp_*/
 # OS
 Thumbs.db
 .DS_Store
+
+# Build artifacts
+PromptEar-v0.11.0-cu126/
+*.zip
+

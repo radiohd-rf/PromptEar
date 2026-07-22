@@ -19,6 +19,7 @@ class AudioFile:
 class PipelineConfig:
     """Конфигурация пайплайна обработки одного файла."""
 
+    output_dir: Path | None = None
     output_format: str = "docx"
     multi_pass: bool = False
     initial_prompt: str | None = None

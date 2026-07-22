@@ -92,8 +92,10 @@ def _process_files(task_id: str) -> None:
 
     try:
         files = task["files"]
+        original_videos = task.get("original_videos", {})
         config = PipelineConfig(
             output_format=task.get("output_format", "docx"),
+            output_dir=UPLOAD_DIR,
             multi_pass=True,
             initial_prompt=task.get("initial_prompt", "") or None,
             qwen_available=True,
@@ -109,7 +111,13 @@ def _process_files(task_id: str) -> None:
         ollama_ok, model_ok = enhancer.is_available()
         emit(OllamaReadyEvent(ollama_ok=ollama_ok, model_ok=model_ok))
 
-        audio_files = [AudioFile(path=Path(f)) for f in files]
+        audio_files = []
+        for f in files:
+            orig = original_videos.get(f)
+            audio_files.append(AudioFile(
+                path=Path(f),
+                original_path=Path(orig) if orig else None,
+            ))
         emit(
             LogEvent(
                 f"Добавлено {len(audio_files)} файлов"
@@ -124,6 +132,12 @@ def _process_files(task_id: str) -> None:
             transcriber=transcriber,
             enhancer=enhancer if ollama_ok and model_ok else None,
         )
+
+        # удаляем загруженные исходные файлы (они не нужны, цель — docx)
+        for f_path_str in task.get("uploaded_files", []):
+            p = Path(f_path_str)
+            if p.exists():
+                p.unlink()
 
         emit(DoneEvent("Готово"))
 
@@ -159,13 +173,15 @@ def upload_files():
     # находим все поддерживаемые файлы
     all_supported = find_supported_files([Path(p) for p in saved])
 
-    # извлекаем аудио из видео
+    # извлекаем аудио из видео; запоминаем оригиналы для удаления после обработки
+    original_videos: dict[str, str] = {}  # wav_path -> original_video_path
     for p in list(all_supported):
         if is_video_file(p):
             try:
                 wav_path = extract_audio(p)
                 all_supported.remove(p)
                 all_supported.append(wav_path)
+                original_videos[str(wav_path)] = str(p)
             except (ValueError, RuntimeError) as exc:
                 app.logger.warning(f"Video extraction failed for {p.name}: {exc}")
                 return jsonify({"error": str(exc)}), 400
@@ -181,6 +197,8 @@ def upload_files():
         "qwen": True,
         "output_format": request.form.get("output_format", "docx"),
         "output_dir": UPLOAD_DIR,
+        "original_videos": original_videos,
+        "uploaded_files": saved,
         "status": "processing",
     }
 
