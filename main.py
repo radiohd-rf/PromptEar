@@ -1,81 +1,61 @@
 #!/usr/bin/env python3
-"""PromptEar — точка входа."""
+"""PromptEar — точка входа (Web + PyWebView)."""
 
-import importlib.util
-import subprocess
+import os
+import socketserver
 import sys
-import tkinter as tk
+import threading
+import time
+import traceback
+import urllib.request
+from pathlib import Path
 
-from app import PromptEarApp
-from utils.logger import get_logger
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-logger = get_logger()
-
-
-def ensure_deps():
-    """Проверяет и устанавливает зависимости если нужно."""
-    missing = []
-    if importlib.util.find_spec("torch") is None:
-        missing.append("torch")
-    if importlib.util.find_spec("faster_whisper") is None:
-        missing.append("faster-whisper")
-
-    if missing:
-        python = sys.executable
-        logger.info(f"Установка зависимостей: {', '.join(missing)}")
-        if sys.stdout:
-            print(f"Установка: {', '.join(missing)}...")
-        if "torch" in missing:
-            subprocess.run(
-                [
-                    python,
-                    "-m",
-                    "pip",
-                    "install",
-                    "--quiet",
-                    "torch",
-                    "torchaudio",
-                    "--index-url",
-                    "https://download.pytorch.org/whl/cu126",
-                    "--trusted-host",
-                    "download.pytorch.org",
-                    "torch==2.11.0+cu126",
-                    "torchaudio==2.11.0+cu126",
-                ],
-                timeout=300,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-        if "faster-whisper" in missing:
-            subprocess.run(
-                [python, "-m", "pip", "install", "--quiet", "faster-whisper"],
-                timeout=300,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
+from web.server import app
 
 
-ensure_deps()
-
-HAS_DND = importlib.util.find_spec("tkinterdnd2") is not None
-if HAS_DND:
-    from tkinterdnd2 import TkinterDnD
+def _find_free_port() -> int:
+    with socketserver.TCPServer(("127.0.0.1", 0), None) as s:
+        return s.server_address[1]
 
 
-def main():
-    try:
-        root = TkinterDnD.Tk() if HAS_DND else tk.Tk()
-        app = PromptEarApp(root)
-        app.run()
-    except Exception as exc:
-        logger.critical(f"Критическая ошибка: {exc}", exc_info=True)
-        from tkinter import messagebox
+def main() -> None:
+    port = _find_free_port()
+    url = f"http://127.0.0.1:{port}"
 
-        messagebox.showerror(
-            "Критическая ошибка",
-            f"PromptEar не может запуститься.\n\n{exc}\n\n"
-            f"Подробнее: %APPDATA%\\PromptEar\\logs\\app.log",
-        )
-        sys.exit(1)
+    threading.Thread(
+        target=lambda: app.run(host="127.0.0.1", port=port, debug=False, threaded=True),
+        daemon=True,
+    ).start()
+
+    for _ in range(100):
+        try:
+            urllib.request.urlopen(url, timeout=1)
+            break
+        except Exception:
+            time.sleep(0.1)
+
+    import webview
+
+    window = webview.create_window(
+        "PromptEar",
+        url,
+        width=860,
+        height=720,
+        resizable=True,
+    )
+
+    webview.start()
+    os._exit(0)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        crash_log = Path(__file__).resolve().parent / "crash.log"
+        with open(str(crash_log), "w", encoding="utf-8") as f:
+            f.write(traceback.format_exc())
+        print(traceback.format_exc(), file=sys.stderr)
+        sys.exit(1)

@@ -2,6 +2,7 @@
 
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from config import (
@@ -12,7 +13,6 @@ from config import (
     QUIET_THRESHOLD_DB,
 )
 from core.events import LogEvent, PipelineEvent
-from collections.abc import Callable
 
 
 class AudioDetector:
@@ -34,7 +34,8 @@ class AudioDetector:
                 "-",
             ]
             result = subprocess.run(
-                cmd, capture_output=True, text=True, encoding="utf-8", timeout=FFMPEG_TIMEOUT
+                cmd, capture_output=True, text=True, encoding="utf-8", timeout=FFMPEG_TIMEOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             for line in result.stderr.splitlines():
                 if "mean_volume" in line:
@@ -76,5 +77,6 @@ class AudioDetector:
             "1",
             str(tmp_path),
         ]
-        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8")
+        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8",
+                       creationflags=subprocess.CREATE_NO_WINDOW)
         return tmp_path

@@ -1,10 +1,9 @@
 #!/usr/bin/env pythonw
-"""Запуск PromptEar без окна терминала."""
+"""Запуск PromptEar без окна терминала (Web-версия)."""
 
 import os
 import sys
 
-# pythonw.exe устанавливает stdout/stderr в None — чиним
 if sys.stdout is None:
     sys.stdout = open(os.devnull, "w", encoding="utf-8")
 if sys.stderr is None:

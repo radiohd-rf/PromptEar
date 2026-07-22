@@ -25,9 +25,6 @@ def ensure_faster_whisper():
     return True
 
 
-ensure_faster_whisper()
-
-
 class Transcriber:
     """Класс для транскрипции аудио через faster-whisper с фоновой загрузкой модели."""
 

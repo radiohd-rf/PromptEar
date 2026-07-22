@@ -38,6 +38,12 @@ htmlcov/
 err*.txt
 out*.txt
 
+# Build output
+*.zip
+_build_*/
+_work/
+_tmp_*/
+
 # OS
 Thumbs.db
 .DS_Store

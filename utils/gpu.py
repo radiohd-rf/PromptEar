@@ -18,6 +18,7 @@ def has_nvidia_gpu() -> bool:
                 capture_output=True,
                 text=True,
                 timeout=NVIDIA_SMI_TIMEOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             if result.returncode == 0 and result.stdout.strip():
                 return True
@@ -29,6 +30,7 @@ def has_nvidia_gpu() -> bool:
             capture_output=True,
             text=True,
             timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         return "nvidia" in result.stdout.lower()
     except Exception:

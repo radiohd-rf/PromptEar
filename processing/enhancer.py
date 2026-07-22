@@ -56,6 +56,7 @@ class OllamaEnhancer:
                 encoding="utf-8",
                 errors="replace",
                 timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             if r.returncode != 0:
                 return False, False
@@ -70,6 +71,7 @@ class OllamaEnhancer:
                 encoding="utf-8",
                 errors="replace",
                 timeout=15,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             return True, self.model in r.stdout
         except Exception:
