@@ -1,12 +1,29 @@
-# Чек-лист: Установка и сборка
+﻿# Чек-лист: Установка и сборка
 
 ## 🛠️ Чем проверять
 
-- Командная строка — запускай bootstrap.bat, run.bat, uninstall.bat, смотри вывод
-- Process Explorer — проверь Job Object, python.exe, ffmpeg.exe
-- Проводник — загляни в venv/, wheels/, output/ — всё ли на месте
-- 7-Zip / WinRAR — открой zip после build_zips, проверь структуру
-- Python — `python build_zips.py cpu`, `python build_zips.py cu126`
+**Командная строка (cmd от имени администратора):**
+- bootstrap.bat — запусти и смотри вывод. Если Python уже есть — он не будет качать заново. Если нет — начнёт скачивание
+- run.bat — должен запустить приложение без ошибок
+- uninstall.bat — спросит что удалять. Если с флагом --silent — сразу удалит всё без вопросов
+
+**Process Explorer (скачай с sysinternals):**
+- Найди python.exe — при закрытии приложения должен исчезнуть (Job Object убивает процесс)
+- Если python.exe остался висеть — баг
+
+**Проводник:**
+- venv/ — есть ли там папка с питоном и пакетами
+- wheels/ — лежат ли .whl файлы torch и torchaudio
+- output/ — создаётся ли при первом запуске
+
+**7-Zip / WinRAR:**
+после python build_zips.py cpu открой zip — внутри должны быть: web/, core/, processing/, utils/, wheels/, ffmpeg.exe, launcher.exe, run.bat, bootstrap.bat и т.д.
+Не должно быть __pycache__, .git, .github.
+
+**build_zips:**
+python build_zips.py cpu
+python build_zips.py cu126
+Если нет ошибок — всё ок.
 
 ## Техники: State Transition, EP, негатив
 
@@ -31,7 +48,7 @@
 ### Uninstall (uninstall.bat)
 
 - [ ] Интерактивный режим — выбор компонентов
-- [ ] `--silent` — удаление без вопросов
+- [ ] --silent — удаление без вопросов
 - [ ] Удаляет: папку программы, venv, кеш Whisper, Ollama, Qwen, настройки и логи
 - [ ] Каждый компонент удаляется отдельно (выбор из списка)
 
@@ -44,9 +61,9 @@
 
 ### Build ZIP (build_zips.py)
 
-- **EP:** `cpu`, `cu126`
-- [ ] `python build_zips.py cpu` — собирает CPU-дистрибутив
-- [ ] `python build_zips.py cu126` — собирает CUDA-дистрибутив
+- **EP:** cpu, cu126
+- [ ] python build_zips.py cpu — собирает CPU-дистрибутив
+- [ ] python build_zips.py cu126 — собирает CUDA-дистрибутив
 - [ ] В архиве: исходники, wheels/, ffmpeg.exe, лаунчер, скрипты
 - [ ] Исключено: __pycache__, .git, .github, .pytest_cache, .ruff_cache
 - [ ] ffmpeg.exe скачивается с gyan.dev
