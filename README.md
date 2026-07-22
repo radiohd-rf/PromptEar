@@ -1,7 +1,9 @@
 # PromptEar
 
 > Транскрибация аудио + улучшение текста через нейросеть.  
-> **Платформа:** Windows (сборка .exe / запуск из Python).
+> **Платформа:** Windows 10/11 — портативная сборка.
+
+**GPU версия (CUDA):** https://disk.yandex.ru/d/qe7s951YxmJLow
 
 Перетащил аудиофайл — получил чистый текст с исправленными ошибками, знаками препинания и расставленными абзацами. Всё работает локально, без интернета.
 
@@ -9,14 +11,14 @@
 
 ## Возможности
 
-- Drag-and-drop аудио (MP3, WAV, FLAC, OGG, M4A, AAC)
-- Распознавание речи через **Whisper** (CPU или CUDA)
+- Drag-and-drop аудио (MP3, WAV, FLAC, OGG, M4A, AAC, WMA)
+- Распознавание речи через **faster-whisper** (CPU или CUDA)
 - 3-проходное улучшение текста через **Qwen 2.5** (Ollama):  
   очистка → грамматика/стиль → структура абзацев
-- Автоопределение темы разговора (история, техника, образование, повседневный)
+- Автоопределение темы разговора
 - Сохранение в **TXT** или **DOCX**
 - Компрессия тихих записей (ffmpeg)
-- Детекция NVIDIA GPU и установка CUDA одной кнопкой
+- Темная/светлая тема интерфейса
 - Остановка обработки в любой момент
 
 ---
@@ -30,50 +32,57 @@
 
 ---
 
-## Как запустить
+## Быстрый старт (CPU)
 
-### Из исходников
+1. Скачать `PromptEar-v0.10.1-cpu.zip` со страницы [релизов](https://github.com/radiohd-rf/PromptEar/releases)
+2. Распаковать в любую папку
+3. Запустить `Запустить PromptEar.exe`
+4. Дождаться установки (bootstrap — 1 раз, скачает модели ~1.5 GB)
+5. Перетащить аудиофайлы в окно → нажать «Обработать»
 
-```bash
-pip install openai-whisper python-docx requests tkinterdnd2
-python main.py
-```
+Требуется: **Ollama** с моделью `qwen2.5:3b` (устанавливается автоматически при первом запуске).
 
-Требуется **Python 3.10+** и установленный [Ollama](https://ollama.com) с моделью Qwen 2.5 3b:
+---
 
-```bash
-ollama pull qwen2.5:3b
-```
+## GPU версия (CUDA)
 
-### Готовая сборка
+Для видеокарт NVIDIA:
 
-Скачать `.exe` со страницы релизов (Inno Setup установщик — поставит Python, зависимости, Ollama и модель автоматически).
+- **Скачать:** https://disk.yandex.ru/d/qe7s951YxmJLow
+- Пароль архива: `PromptEar`
+- Всё остальное так же, как в CPU версии
+
+Размер: ~2.5 GB (torch с CUDA 12.6).  
+Ускорение: в 3-5x быстрее CPU на RTX 3060+.
 
 ---
 
 ## Архитектура
 
 ```
-main.py → PromptEarApp (app.py)
-           ├─ GUI: tkinter (спиннер, лог, список файлов)
-           ├─ Worker: фоновый поток → очередь сообщений → _check_queue()
-           ├─ Whisper → распознавание
-           ├─ Ollama (Qwen 2.5) → 1-pass / 3-pass улучшение
-           └─ TXT/DOCX → сохранение
+Запустить PromptEar.exe (C# лаунчер)
+  └─ bootstrap.bat (однократная установка)
+      └─ python main.py
+           └─ PyWebView (нативное окно)
+                └─ веб-интерфейс (Flask + SSE)
+                     ├─ Drag-and-drop файлов
+                     ├─ Whisper → распознавание
+                     ├─ Ollama (Qwen 2.5) → 3-pass улучшение
+                     └─ TXT/DOCX → сохранение
 ```
 
 ### Ключевые модули
 
 | Модуль | Назначение |
 |--------|-----------|
-| `config.py` | Единый конфиг: цвета, модель, таймауты, пороги |
+| `main.py` | PyWebView — нативное окно браузера |
+| `web/server.py` | Flask + SSE события (лог, прогресс, статус) |
+| `web/index.html` | Интерфейс drag-and-drop |
+| `config.py` | Единый конфиг: пути, модель, таймауты |
 | `processing/transcriber.py` | Whisper + прогресс-коллбек |
 | `processing/enhancer.py` | Ollama: 1-pass и 3-pass (очистка→стиль→структура) |
-| `processing/detector.py` | Анализ громкости, препроцессинг ffmpeg |
-| `processing/topic.py` | Определение темы по ключевым словам |
-| `utils/protocol.py` | QueueMsg Enum — типизированные сообщения для очереди |
-| `utils/files.py` | Поиск аудио, сохранение TXT/DOCX |
-| `utils/gpu.py` | Детекция NVIDIA, проверка torch+cuda |
+| `core/detector.py` | Анализ громкости, препроцессинг ffmpeg |
+| `build_zips.py` | Сборка zip-дистрибутива (pip download wheels) |
 
 ---
 
@@ -81,29 +90,26 @@ main.py → PromptEarApp (app.py)
 
 | Компонент | Технология |
 |-----------|-----------|
-| GUI | tkinter + ttk |
-| Распознавание | openai-whisper |
+| Окно | PyWebView (Microsoft Edge WebView2) |
+| Сервер | Flask + Server-Sent Events |
+| Распознавание | faster-whisper (CTranslate2) |
 | Улучшение текста | Ollama + Qwen 2.5 3b |
-| Сборка | PyInstaller → Inno Setup |
-| Качество кода | Ruff (линтер + форматтер) |
-| Типизация | mypy (check_untyped_defs) |
-| Pre-commit | ruff check → ruff format → mypy → pytest |
-| Тесты | pytest — 97 unit + smoke |
-| CI | GitHub Actions (ruff → mypy → pytest) |
+| Лаунчер | C# (.NET Framework) |
+| Сборка | build_zips.py + pip download |
 
 ---
 
-## Как создавался проект
+## Как собрать самому
 
-Проект написан с использованием **vibe coding**: автор формулировал задачи на естественном языке, AI-агент (opencode) генерировал код. 
+```bash
+# CPU
+python build_zips.py cpu
 
-Роль человека:
-- Архитектурные решения (разделение на модули, выбор стека)
-- Код-ревью и тестирование
-- Настройка CI/CD, pre-commit, инструментария
-- Исправление логических ошибок, которые агент не заметил
+# CUDA
+python build_zips.py cu126
+```
 
-Исходный код — монолит (`transkrib.py`). В результате рефакторинга получена модульная архитектура с централизованным конфигом, типизированным протоколом очереди, 97 юнит-тестами и полным pipeline контроля качества.
+Требуется Python 3.12. На выходе — готовый zip с wheel-файлами torch.
 
 ---
 
