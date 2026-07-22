@@ -76,7 +76,7 @@ async function runPipeline() {
   document.getElementById('log-container').style.display = 'flex';
   clearLog();
   addLog('=== PromptEar ===');
-  setStatus('Загрузка файлов...');
+  showSpinner();
 
   try {
     const resp = await fetch('/api/files', { method: 'POST', body: formData });
@@ -84,7 +84,6 @@ async function runPipeline() {
 
     if (data.error) {
       addLog(`Ошибка: ${data.error}`);
-      setStatus('Ошибка');
       finish();
       return;
     }
@@ -94,7 +93,6 @@ async function runPipeline() {
     connectSSE(taskId);
   } catch (err) {
     addLog(`Ошибка: ${err.message}`);
-    setStatus('Ошибка');
     finish();
   }
 }
@@ -128,11 +126,7 @@ function handleEvent(msg) {
       break;
 
     case 'progress':
-      setStatus(`[${msg.current}/${msg.total}] ${msg.filename} — осталось ~${msg.eta}`);
-      break;
-
     case 'transcribing':
-      setStatus(msg.message);
       break;
 
     case 'busy':
@@ -152,19 +146,16 @@ function handleEvent(msg) {
     case 'done':
       addLog('✅ ' + msg.message);
       addLog('📁 Результаты сохранены в папке "output"');
-      setStatus('Готово');
       finish();
       break;
 
     case 'error':
       addLog('❌ ' + msg.message);
-      setStatus('Ошибка');
       finish();
       break;
 
     case 'cancelled':
       addLog('⛔ Отменено');
-      setStatus('Отменено');
       finish();
       break;
 
@@ -180,6 +171,7 @@ function cancelPipeline() {
 }
 
 function finish() {
+  hideSpinner();
   if (eventSource) { eventSource.close(); eventSource = null; }
   document.getElementById('run-btn').disabled = false;
   document.getElementById('run-btn').style.display = '';
@@ -198,6 +190,14 @@ function closeHelp() {
 
 /* ── UI helpers ──────────────────────────────────────────── */
 
+function showSpinner() {
+  document.getElementById('thinking-spinner').style.display = '';
+}
+
+function hideSpinner() {
+  document.getElementById('thinking-spinner').style.display = 'none';
+}
+
 function addLog(msg) {
   const log = document.getElementById('log');
   const line = document.createElement('div');
@@ -208,10 +208,6 @@ function addLog(msg) {
 
 function clearLog() {
   document.getElementById('log').innerHTML = '';
-}
-
-function setStatus(text) {
-  document.getElementById('status-text').textContent = text;
 }
 
 function openOutputFolder() {
@@ -249,15 +245,6 @@ document.addEventListener('DOMContentLoaded', init);
 
 document.body.addEventListener('dragover', e => e.preventDefault());
 document.body.addEventListener('drop', e => e.preventDefault());
-
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    const overlay = document.getElementById('help-overlay');
-    if (overlay.style.display !== 'none') {
-      closeHelp();
-    }
-  }
-});
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
