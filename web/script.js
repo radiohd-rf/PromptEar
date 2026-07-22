@@ -67,6 +67,9 @@ async function runPipeline() {
   }
   formData.append('output_format', document.getElementById('output-format').value);
 
+  const ctx = document.getElementById('context-prompt').value.trim();
+  if (ctx) formData.append('initial_prompt', ctx);
+
   document.getElementById('run-btn').disabled = true;
   document.getElementById('run-btn').style.display = 'none';
   document.getElementById('cancel-btn').style.display = '';
@@ -148,6 +151,7 @@ function handleEvent(msg) {
 
     case 'done':
       addLog('✅ ' + msg.message);
+      addLog('📁 Результаты сохранены в папке "output"');
       setStatus('Готово');
       finish();
       break;
@@ -198,6 +202,10 @@ function clearLog() {
 
 function setStatus(text) {
   document.getElementById('status-text').textContent = text;
+}
+
+function openOutputFolder() {
+  fetch('/api/open-output');
 }
 
 /* ── Инициализация ──────────────────────────────────────── */

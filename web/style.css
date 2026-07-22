@@ -136,6 +136,34 @@ main { flex: 1; overflow-y: auto; padding: 16px 0; }
   font-size: 13px;
   cursor: pointer;
 }
+#context-block {
+  margin-top: 12px;
+}
+#context-prompt {
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+#context-prompt::placeholder { color: var(--ph); }
+
+#open-output-btn {
+  padding: 6px 14px;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  margin-left: auto;
+}
+#open-output-btn:hover { background: var(--header-bg); }
+
 #cancel-btn {
   padding: 10px 24px;
   background: transparent;
@@ -148,7 +176,6 @@ main { flex: 1; overflow-y: auto; padding: 16px 0; }
 #status-text {
   font-size: 13px;
   color: var(--ph);
-  margin-left: auto;
 }
 
 #log-container { margin-top: 12px; flex: 1; display: flex; flex-direction: column; }

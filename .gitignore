@@ -41,7 +41,7 @@ out*.txt
 # Build output
 *.zip
 _build_*/
-_work/
+output/
 _tmp_*/
 
 # OS
