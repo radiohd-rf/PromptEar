@@ -4,12 +4,18 @@ title PromptEar
 set "APP_DIR=%~dp0"
 set "VENV_DIR=%APP_DIR%venv"
 
-if not exist "%VENV_DIR%\Scripts\pythonw.exe" (
+if not exist "%VENV_DIR%\Scripts\python.exe" (
+    echo [PromptEar] Virtual environment not found.
+    echo [PromptEar] Running setup first...
     echo.
-    echo Virtual environment not found. Run bootstrap.bat first.
-    echo.
-    pause
-    exit /b 1
+    call "%APP_DIR%bootstrap.bat"
+    if %errorlevel% neq 0 (
+        echo.
+        echo [PromptEar] Setup failed. Please run bootstrap.bat manually.
+        pause
+        exit /b 1
+    )
 )
 
-start "" /B "%VENV_DIR%\Scripts\pythonw.exe" "%APP_DIR%run.pyw"
+"%VENV_DIR%\Scripts\python.exe" "%APP_DIR%main.py"
+pause

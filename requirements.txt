@@ -1,7 +1,6 @@
-# PromptEar — зависимости
+flask>=3.0.0
+pywebview>=5.0.0
 faster-whisper>=1.2.1
 python-docx>=1.1.0
 requests>=2.28.0
-
-# Опционально: drag-and-drop в GUI
-# pip install tkinterdnd2
+Pillow>=10.0.0

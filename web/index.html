@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PromptEar — транскрибация аудио</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>PromptEar</h1>
+    <span id="subtitle">транскрибация аудио</span>
+    <div id="theme-toggle" onclick="toggleTheme()">☀️</div>
+  </header>
+
+  <main>
+    <!-- Drop zone -->
+    <div id="drop-zone" ondragover="event.preventDefault()" ondrop="onDrop(event)">
+      <p id="drop-text">Перетащите аудиофайлы сюда</p>
+      <p id="drop-hint">или нажмите «Выбрать файлы»</p>
+      <button onclick="document.getElementById('file-input').click()">Выбрать файлы</button>
+      <input id="file-input" type="file" multiple accept=".mp3,.wav,.m4a,.ogg,.flac,.aac,.wma" style="display:none" onchange="onFileSelect(event)">
+    </div>
+
+    <!-- File list -->
+    <div id="file-list-container" style="display:none">
+      <h3>Файлы</h3>
+      <ul id="file-list"></ul>
+    </div>
+
+    <!-- Toolbar -->
+    <div id="toolbar">
+      <button id="run-btn" onclick="runPipeline()">Обработать</button>
+      <button id="cancel-btn" style="display:none" onclick="cancelPipeline()">Отмена</button>
+      <label id="format-label">
+        Формат:
+        <select id="output-format">
+          <option value="docx" selected>DOCX</option>
+          <option value="txt">TXT</option>
+        </select>
+      </label>
+      <span id="status-text"></span>
+    </div>
+
+    <!-- Log panel -->
+    <div id="log-container" style="display:none">
+      <h3>Лог</h3>
+      <div id="log"></div>
+    </div>
+  </main>
+
+  <footer>
+    <span id="gpu-status"></span>
+    <span id="ollama-status"></span>
+  </footer>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
