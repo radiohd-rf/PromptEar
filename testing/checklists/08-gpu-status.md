@@ -1,5 +1,12 @@
 # Чек-лист: GPU и статус-бар
 
+## 🛠️ Чем проверять
+
+- curl / Postman — GET /api/gpu, GET /api/ollama
+- Командная строка — `nvidia-smi`, `python -c "import torch; print(torch.cuda.is_available())"`, `ollama list`
+- DevTools → Elements — смотри футер, цвет success
+- Process Explorer — есть ли ollama.exe
+
 ## Техники: Таблица принятия решений (Decision Table)
 
 ### Decision Table: статус-бар

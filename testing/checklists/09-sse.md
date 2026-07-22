@@ -1,5 +1,12 @@
 # Чек-лист: SSE (Server-Sent Events)
 
+## 🛠️ Чем проверять
+
+- DevTools → Network → EventStream — смотри все события в реальном времени
+- DevTools → Network → offline — имитируй обрыв, смотри onerror
+- curl — `curl -N http://localhost:5000/api/status/{task_id}` посмотреть сырой стрим
+- Postman — GET /api/status/{id}, долгое соединение
+
 ## Техники: State Transition, негатив
 
 ### State Transition

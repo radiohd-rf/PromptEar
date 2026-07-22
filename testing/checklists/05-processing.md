@@ -1,5 +1,13 @@
 # Чек-лист: Pipeline обработки
 
+## 🛠️ Чем проверять
+
+- ffprobe — `ffprobe output.wav` смотри параметры после preprocess
+- curl — `curl http://localhost:11434/api/generate` проверь что Ollama жива
+- DevTools → Network — SSE-события log/progress/done
+- Cекундомер / лог — замерь время для 100 MB и для 1 GB
+- Python — `python -c "import torch; print(torch.cuda.is_available())"`
+
 ## Техники: State Transition, EP, BVA, таблица решений
 
 ### State Transition — 5 шагов pipeline

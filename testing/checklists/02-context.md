@@ -1,5 +1,12 @@
 # Чек-лист: Контекст (initial_prompt)
 
+## 🛠️ Чем проверять
+
+- DevTools → Elements — смотри value поля, меняется ли
+- DevTools → Network — в POST /api/files смотреть initial_prompt
+- curl / Postman — отправь контекст со спецсимволами, тегами
+- Notepad++ / символьная таблица — unicode, эмодзи вставить
+
 ## Техники: EP, BVA
 
 ### Эквивалентные классы

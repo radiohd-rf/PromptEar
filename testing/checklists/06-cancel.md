@@ -1,5 +1,12 @@
 # Чек-лист: Отмена обработки
 
+## 🛠️ Чем проверять
+
+- DevTools → Network — смотри POST /api/cancel, какой статус
+- DevTools → Console — eventSource.onerror если что
+- Проводник — загляни в output/ после отмены, какие файлы есть
+- Process Explorer — проверь что ffmpeg/python убились
+
 ## Техники: State Transition (отмена на каждом шаге), EP, негатив
 
 ### State Transition — отмена на каждом шаге
