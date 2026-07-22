@@ -4,7 +4,7 @@
 > **Платформа:** Windows 10/11 — портативная сборка.
 
 **CPU версия:** [GitHub Releases](https://github.com/radiohd-rf/PromptEar/releases/latest)  
-**GPU версия (CUDA):** https://disk.yandex.ru/d/qe7s951YxmJLow — пароль: `PromptEar`
+**GPU версия (CUDA):** [Яндекс.Диск](https://disk.yandex.ru/d/qe7s951YxmJLow) — пароль: `PromptEar`
 
 Перетащил аудиофайл — получил чистый текст с исправленными ошибками, знаками препинания и расставленными абзацами. Всё работает локально, без интернета.
 
