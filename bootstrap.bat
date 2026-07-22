@@ -93,7 +93,7 @@ echo   Libraries installed
 :: ---------------------------------------------------------------
 :: 5. Check / install WebView2 Runtime
 :: ---------------------------------------------------------------
-echo [5/7] Checking WebView2 Runtime...
+echo [5/6] Checking WebView2 Runtime...
 
 reg query "HKLM\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" >nul 2>&1
 if %errorlevel% equ 0 (
@@ -110,23 +110,9 @@ if %errorlevel% equ 0 (
 )
 
 :: ---------------------------------------------------------------
-:: 6. Check FFmpeg
+:: 6. Check / install Ollama
 :: ---------------------------------------------------------------
-echo [6/7] Checking FFmpeg...
-
-where ffmpeg >nul 2>&1
-if %errorlevel% equ 0 (
-    echo   FFmpeg found
-) else (
-    echo   FFmpeg not found.
-    echo   Install: winget install ffmpeg
-    echo   Or download: https://ffmpeg.org/download.html
-)
-
-:: ---------------------------------------------------------------
-:: 7. Check / install Ollama
-:: ---------------------------------------------------------------
-echo [7/7] Checking Ollama...
+echo [6/6] Checking Ollama...
 
 where ollama >nul 2>&1
 if %errorlevel% equ 0 (

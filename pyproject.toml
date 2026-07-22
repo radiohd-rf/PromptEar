@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "PromptEar"
-version = "0.10.2"
+version = "0.11.0"
 description = "Транскрибация аудио с улучшением текста через LLM"
 authors = [{name = "Dmitry Kiryushchenko"}]
 license = {text = "MIT"}

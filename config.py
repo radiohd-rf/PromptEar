@@ -15,8 +15,9 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 OUTPUT_FORMATS = ("docx", "txt")
 DEFAULT_FORMAT = "docx"
 
-# ── Audio ───────────────────────────────────────────────────────────────────
+# ── Audio / Video ───────────────────────────────────────────────────────────
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac", ".wma"}
+VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov", ".webm", ".wmv", ".m4v", ".flv", ".ts"}
 QUIET_THRESHOLD_DB = -20.0
 FFMPEG_TIMEOUT = 30
 PREPROCESS_SAMPLE_RATE = 16000
