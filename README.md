@@ -12,7 +12,8 @@
 
 ## Возможности
 
-- Drag-and-drop аудио (MP3, WAV, FLAC, OGG, M4A, AAC, WMA)
+- Drag-and-drop аудио (MP3, WAV, FLAC, OGG, M4A, AAC, WMA) и **видео** (MP4, AVI, MKV, MOV, WEBM, WMV)
+- Автоматическое извлечение аудиодорожки из видео (встроенный ffmpeg)
 - Распознавание речи через **faster-whisper** (CPU или CUDA)
 - 3-проходное улучшение текста через **Qwen 2.5** (Ollama):  
   очистка → грамматика/стиль → структура абзацев
