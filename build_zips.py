@@ -113,7 +113,7 @@ def build_variant(name: str, index_url: str) -> None:
 
     build_dir = ROOT / f"_build_{name}"
     wheels_dir = build_dir / "wheels"
-    zip_path = ROOT / f"PromptEar-v0.11.0-{name}.zip"
+    zip_path = ROOT / f"PromptEar-v0.11.2-{name}.zip"
 
     # Очистка
     if build_dir.exists():
