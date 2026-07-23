@@ -21,7 +21,7 @@ from core.events import (
 )
 from core.models import AudioFile, PipelineConfig
 from core.pipeline import run_pipeline as run_pipeline_core
-from processing.enhancer import OllamaEnhancer
+from processing.enhancer import OllamaEnhancer, PROMPT_PROFILES
 from processing.transcriber import Transcriber
 from utils.files import find_supported_files, is_video_file
 from utils.extract_audio import extract_audio
@@ -99,6 +99,7 @@ def _process_files(task_id: str) -> None:
             multi_pass=True,
             initial_prompt=task.get("initial_prompt", "") or None,
             qwen_available=True,
+            profile=task.get("profile", "default"),
         )
 
         gpu_info = detect_and_report()
@@ -196,6 +197,7 @@ def upload_files():
         "initial_prompt": request.form.get("initial_prompt", ""),
         "qwen": True,
         "output_format": request.form.get("output_format", "docx"),
+        "profile": request.form.get("profile", "default"),
         "output_dir": UPLOAD_DIR,
         "original_videos": original_videos,
         "uploaded_files": saved,
@@ -264,6 +266,17 @@ def ollama_check():
         return jsonify({"ollama_ok": ollama_ok, "model_ok": model_ok})
     except Exception as exc:
         return jsonify({"ollama_ok": False, "model_ok": False, "error": str(exc)})
+
+
+@app.route("/api/profiles")
+def profiles():
+    return jsonify({
+        "current": "default",
+        "profiles": [
+            {"id": pid, "label": p.label}
+            for pid, p in PROMPT_PROFILES.items()
+        ],
+    })
 
 
 @app.route("/api/open-output")

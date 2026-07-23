@@ -66,6 +66,7 @@ async function runPipeline() {
     formData.append('files', f);
   }
   formData.append('output_format', document.getElementById('output-format').value);
+  formData.append('profile', document.getElementById('profile-select').value);
 
   const ctx = document.getElementById('context-prompt').value.trim();
   if (ctx) formData.append('initial_prompt', ctx);
@@ -76,6 +77,10 @@ async function runPipeline() {
   document.getElementById('log-container').style.display = 'flex';
   clearLog();
   addLog('=== PromptEar ===');
+  const profile = document.getElementById('profile-select').value;
+  if (profile === 'summary') {
+    addLog('📝 Профиль: Резюме — на выходе краткая выжимка');
+  }
   showSpinner();
 
   try {

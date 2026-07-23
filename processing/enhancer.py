@@ -1,10 +1,11 @@
-"""Улучшение текста через Ollama + Qwen. 3-проходная система."""
+"""Улучшение текста через Ollama + Qwen. Многопроходная система с профилями."""
 
 import os
 import re
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass, field
 from threading import Event
 
 import requests
@@ -25,6 +26,127 @@ PASS_LABELS = {
     "pass1": "Очистка (орфография, пунктуация, повторы)",
     "pass2": "Стиль (грамматика, согласование)",
     "pass3": "Структура (абзацы, диалоги)",
+    "pass4": "Резюме (выжимка)",
+}
+
+
+@dataclass
+class EnhancementProfile:
+    """Профиль улучшения: набор проходов и промптов."""
+
+    label: str
+    passes: list[str]
+    skip_passes: list[str] = field(default_factory=list)
+
+
+CLEANUP_PROMPT_BASE = (
+    "Ты — редактор. Вход — сырая транскрипция с ошибками распознавания.\n\n"
+    "Правила:\n"
+    "- Цель: минимальные изменения. Меняй только то, что точно ошибочно\n"
+    "- Если сомневаешься — оставь как есть\n"
+    "- Исправь только орфографию, пунктуацию и повторы слов подряд\n"
+    "- В тексте МОЖЕТ быть несколько говорящих — не удаляй реплики ни одного\n"
+    "- ЗАПРЕЩЕНО менять слова, порядок слов, стиль, структуру\n"
+    "- ЗАПРЕЩЕНО удалять предложения, факты, имена, числа, даты\n"
+    "- ЗАПРЕЩЕНО пересказывать, сокращать, обобщать, переформулировать\n"
+    "- Не добавляй ничего от себя\n"
+    "- Не пиши пояснений, выводов, комментариев — верни только исправленный текст\n\n"
+    "Проверь себя: количество предложений в ответе должно быть "
+    "равно количеству предложений во входе."
+)
+
+STYLE_PROMPTS: dict[str, str] = {
+    "default": (
+        "Ты — редактор. Вход — текст после автоматической очистки, "
+        "но с грамматическими ошибками.\n\n"
+        "Правила:\n"
+        "- Цель: минимальные изменения. Меняй только то, что точно ошибочно\n"
+        "- Если сомневаешься — оставь как есть\n"
+        "- В тексте МОЖЕТ быть несколько говорящих — не удаляй реплики ни одного\n"
+        "- Исправь только согласование окончаний, падежей, времён глаголов\n"
+        "- Если порядок слов явно нарушен — исправь, иначе оставь как есть\n"
+        "- ЗАПРЕЩЕНО менять лексику, стиль, структуру абзацев\n"
+        "- ЗАПРЕЩЕНО удалять или пересказывать факты, имена, числа, даты\n"
+        "- ЗАПРЕЩЕНО добавлять от себя, давать пояснения или комментарии\n"
+        "- Верни только исправленный текст, без вступлений и заключений\n\n"
+        "Проверь себя: количество предложений в ответе должно быть "
+        "равно количеству предложений во входе."
+    ),
+    "formal": (
+        "Приведи стиль к формальному, научному. Используй точную терминологию.\n"
+        "Избегай разговорных оборотов, междометий.\n"
+        "Исправь согласование окончаний, падежей, времён глаголов.\n"
+        "ЗАПРЕЩЕНО менять смысл, факты, имена, числа, даты.\n"
+        "ЗАПРЕЩЕНО удалять реплики говорящих.\n"
+        "Верни только исправленный текст."
+    ),
+    "notes": (
+        "Сделай текст лаконичным: убери словесный мусор, повторы, воду.\n"
+        "Сократи длинные описания до сути. Сохрани все ключевые факты.\n"
+        "ЗАПРЕЩЕНО менять смысл, имена, числа, даты.\n"
+        "ЗАПРЕЩЕНО удалять реплики говорящих.\n"
+        "Верни только исправленный текст."
+    ),
+}
+
+STRUCTURE_PROMPTS: dict[str, str] = {
+    "default": (
+        "Ты — редактор. Вход — текст с корректной орфографией и грамматикой.\n\n"
+        "Что можно делать:\n"
+        "- Разбить на абзацы по смене темы или говорящего (добавить пустые строки)\n"
+        "- Если есть диалоги/прямая речь — каждый реплика с новой строки\n"
+        "- Объединить короткие однострочные абзацы в связные блоки\n\n"
+        "ЗАПРЕЩЕНО:\n"
+        "- Менять слова, порядок слов, стиль, грамматику\n"
+        "- Удалять или пересказывать факты, имена, числа, даты\n"
+        "- Удалять реплики любого из говорящих — сохрани всех спикеров\n"
+        "- Добавлять от себя, давать пояснения или выводы\n\n"
+        "Цель: минимальные изменения. Если нечего менять в структуре — верни текст как есть.\n"
+        "Верни только исправленный текст — ни слова лишнего."
+    ),
+    "formal": (
+        "Разбей на логические разделы по смене темы.\n"
+        "Добавь заголовки разделов, если тема явно меняется.\n"
+        "Объедини короткие абзацы в связные блоки.\n"
+        "ЗАПРЕЩЕНО менять слова, стиль, грамматику.\n"
+        "ЗАПРЕЩЕНО удалять факты, имена, числа, даты.\n"
+        "Верни только исправленный текст."
+    ),
+    "notes": (
+        "Оформи как конспект: используй маркированные списки и ключевые тезисы.\n"
+        "Группируй близкие по смыслу утверждения.\n"
+        "ЗАПРЕЩЕНО менять смысл, факты, имена, числа, даты.\n"
+        "Верни только исправленный текст."
+    ),
+}
+
+SUMMARY_PROMPT = (
+    "Ты — редактор. Сделай краткую выжимку текста.\n\n"
+    "Правила:\n"
+    "- Напиши 3-5 предложений: о чём текст, кто говорит, ключевые факты\n"
+    "- Сохрани имена, даты, числа\n"
+    "- Не добавляй от себя интерпретаций и выводов\n"
+    "- Верни только выжимку, без вступлений и пояснений"
+)
+
+PROMPT_PROFILES: dict[str, EnhancementProfile] = {
+    "default": EnhancementProfile(
+        label="Разговорный",
+        passes=["cleanup", "style", "structure"],
+    ),
+    "formal": EnhancementProfile(
+        label="Формальный",
+        passes=["cleanup", "style", "structure"],
+    ),
+    "notes": EnhancementProfile(
+        label="Конспект",
+        passes=["cleanup", "style", "structure"],
+    ),
+    "summary": EnhancementProfile(
+        label="Резюме",
+        passes=["cleanup", "summary"],
+        skip_passes=["style", "structure"],
+    ),
 }
 
 
@@ -134,10 +256,10 @@ class OllamaEnhancer:
         return chunks or [text]
 
     def enhance_multi_pass(self, text: str, topic: str = "", progress_callback=None,
-                           cancel: Event | None = None) -> str:
-        """3-проходное улучшение: очистка → стиль → структура.
+                           cancel: Event | None = None, profile: str = "default") -> str:
+        """Многопроходное улучшение в соответствии с профилем.
 
-        Длинные тексты дробятся на чанки, каждый обрабатывается независимо.
+        Профиль определяет набор проходов и промпты для каждого.
         """
         if not text.strip():
             return text
@@ -145,12 +267,11 @@ class OllamaEnhancer:
         if not topic:
             topic = detect_topic(text)
 
+        profile_data = PROMPT_PROFILES.get(profile, PROMPT_PROFILES["default"])
+
         chunks = self._chunk_text(text, ENHANCER_CHUNK_SIZE)
-        passes = [
-            ("pass1", self._pass_cleanup),
-            ("pass2", self._pass_style),
-            ("pass3", self._pass_structure),
-        ]
+        pass_defs = self._build_pass_defs(profile, profile_data)
+        total_passes = len(pass_defs)
 
         processed = []
         for idx, chunk in enumerate(chunks):
@@ -158,17 +279,17 @@ class OllamaEnhancer:
                 break
             chunk = self._protect_speakers(chunk)
 
-            for name, pass_fn in passes:
+            for pi, (name, pass_fn) in enumerate(pass_defs, 1):
                 if cancel is not None and cancel.is_set():
                     break
-                label = f"Проход {name[4:]}/3: {PASS_LABELS.get(name, name)}"
+                label = f"Проход {pi}/{total_passes}: {PASS_LABELS.get(name, name)}"
                 if len(chunks) > 1:
                     label = f"Чанк {idx + 1}/{len(chunks)}: {label}"
                 if progress_callback:
                     progress_callback(label)
                 try:
                     result = pass_fn(chunk, topic)
-                    if self._result_too_short(result, chunk):
+                    if name != "summary" and self._result_too_short(result, chunk):
                         if progress_callback:
                             progress_callback(
                                 "  Результат слишком короткий (<60% длины), сохранён предыдущий"
@@ -177,13 +298,29 @@ class OllamaEnhancer:
                         chunk = result
                 except Exception:
                     if progress_callback:
-                        progress_callback(f"  Ошибка на проходе {name[4:]}, сохранён предыдущий")
+                        progress_callback(f"  Ошибка на проходе {name}, сохранён предыдущий")
 
             if cancel is not None and cancel.is_set():
                 break
             processed.append(self._restore_speakers(chunk))
 
         return "\n\n".join(processed)
+
+    def _build_pass_defs(self, profile: str, profile_data: EnhancementProfile) -> list[tuple[str, callable]]:
+        """Собирает список (имя_прохода, функция) согласно профилю."""
+        pass_defs = []
+        for name in profile_data.passes:
+            if name == "cleanup":
+                pass_defs.append(("pass1", self._pass_cleanup))
+            elif name == "style":
+                prompt = STYLE_PROMPTS.get(profile, STYLE_PROMPTS["default"])
+                pass_defs.append(("pass2", lambda t, tp, _p=prompt: self._pass_style(t, tp, _p)))
+            elif name == "structure":
+                prompt = STRUCTURE_PROMPTS.get(profile, STRUCTURE_PROMPTS["default"])
+                pass_defs.append(("pass3", lambda t, tp, _p=prompt: self._pass_structure(t, tp, _p)))
+            elif name == "summary":
+                pass_defs.append(("pass4", self._pass_summary))
+        return pass_defs
 
     # ── Отдельные проходы ──────────────────────────────────────────────────
 
@@ -226,45 +363,25 @@ class OllamaEnhancer:
         prompt += f"\n\nТекст:\n{text}"
         return self._call_ollama(prompt)
 
-    def _pass_style(self, text: str, topic: str) -> str:
+    def _pass_style(self, text: str, topic: str, prompt_override: str | None = None) -> str:
         """Проход 2: грамматика, стиль, согласование."""
-        prompt = (
-            "Ты — редактор. Вход — текст после автоматической очистки, "
-            "но с грамматическими ошибками.\n\n"
-            "Правила:\n"
-            "- Цель: минимальные изменения. Меняй только то, что точно ошибочно\n"
-            "- Если сомневаешься — оставь как есть\n"
-            "- В тексте МОЖЕТ быть несколько говорящих — не удаляй реплики ни одного\n"
-            "- Исправь только согласование окончаний, падежей, времён глаголов\n"
-            "- Если порядок слов явно нарушен — исправь, иначе оставь как есть\n"
-            "- ЗАПРЕЩЕНО менять лексику, стиль, структуру абзацев\n"
-            "- ЗАПРЕЩЕНО удалять или пересказывать факты, имена, числа, даты\n"
-            "- ЗАПРЕЩЕНО добавлять от себя, давать пояснения или комментарии\n"
-            "- Верни только исправленный текст, без вступлений и заключений\n\n"
-            "Проверь себя: количество предложений в ответе должно быть "
-            "равно количеству предложений во входе."
-        )
+        prompt = prompt_override or STYLE_PROMPTS["default"]
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nТекст:\n{text}"
         return self._call_ollama(prompt)
 
-    def _pass_structure(self, text: str, topic: str) -> str:
+    def _pass_structure(self, text: str, topic: str, prompt_override: str | None = None) -> str:
         """Проход 3: разбивка на абзацы, оформление диалогов."""
-        prompt = (
-            "Ты — редактор. Вход — текст с корректной орфографией и грамматикой.\n\n"
-            "Что можно делать:\n"
-            "- Разбить на абзацы по смене темы или говорящего (добавить пустые строки)\n"
-            "- Если есть диалоги/прямая речь — каждый реплика с новой строки\n"
-            "- Объединить короткие однострочные абзацы в связные блоки\n\n"
-            "ЗАПРЕЩЕНО:\n"
-            "- Менять слова, порядок слов, стиль, грамматику\n"
-            "- Удалять или пересказывать факты, имена, числа, даты\n"
-            "- Удалять реплики любого из говорящих — сохрани всех спикеров\n"
-            "- Добавлять от себя, давать пояснения или выводы\n\n"
-            "Цель: минимальные изменения. Если нечего менять в структуре — верни текст как есть.\n"
-            "Верни только исправленный текст — ни слова лишнего."
-        )
+        prompt = prompt_override or STRUCTURE_PROMPTS["default"]
+        if topic:
+            prompt += f"\nТема: {topic}"
+        prompt += f"\n\nТекст:\n{text}"
+        return self._call_ollama(prompt)
+
+    def _pass_summary(self, text: str, topic: str) -> str:
+        """Проход 4: краткая выжимка текста (для профиля 'summary')."""
+        prompt = SUMMARY_PROMPT
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nТекст:\n{text}"
