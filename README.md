@@ -1,6 +1,6 @@
 # PromptEar
 
-![Version](https://img.shields.io/badge/version-0.11.2-blue)
+![Version](https://img.shields.io/badge/version-0.12.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078d7)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Privacy](https://img.shields.io/badge/privacy-100%25_local-brightgreen)
@@ -27,6 +27,8 @@
 - Автоматическое извлечение аудиодорожки из видео (встроенный ffmpeg)
 - Распознавание речи через **faster-whisper** (CPU или CUDA)
 - 3-проходное улучшение текста через **Qwen 2.5** (Ollama): очистка → грамматика/стиль → структура абзацев
+- **Профили улучшения:** Разговорный, Формальный, Конспект — разный стиль обработки
+- **Резюме:** краткая выжимка текста в 3–5 предложений (сохраняется как `*_summary.md`)
 - Автоопределение темы разговора
 - Сохранение в **TXT** или **DOCX**
 - Компрессия тихих записей (ffmpeg)
@@ -76,7 +78,7 @@
 | `web/index.html` | Интерфейс drag-and-drop |
 | `config.py` | Единый конфиг: пути, модель, таймауты |
 | `processing/transcriber.py` | Whisper + прогресс-коллбек |
-| `processing/enhancer.py` | Ollama: 1-pass и 3-pass (очистка→стиль→структура) |
+| `processing/enhancer.py` | Ollama: профили улучшения (4 профиля, до 3 проходов + summary) |
 | `core/detector.py` | Анализ громкости, препроцессинг ffmpeg |
 | `build_zips.py` | Сборка zip-дистрибутива (pip download wheels) |
 
