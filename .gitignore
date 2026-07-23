@@ -48,7 +48,10 @@ _tmp_*/
 Thumbs.db
 .DS_Store
 
-# Build artifacts
-PromptEar-v0.11.0-cu126/
-*.zip
+# Project junk (not part of repo)
+NOTES.md
+screenreadmi.jpg
+ffmpeg.exe
+wheels/
+Запустить PromptEar.exe
 
