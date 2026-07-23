@@ -35,7 +35,7 @@
 
 ## Быстрый старт (CPU)
 
-1. Скачать `PromptEar-v0.11.2-cpu.zip` со страницы [релизов](https://github.com/radiohd-rf/PromptEar/releases)
+1. Скачать `PromptEar-v0.12.0-cpu.zip` со страницы [релизов](https://github.com/radiohd-rf/PromptEar/releases)
 2. Распаковать в любую папку
 3. Запустить `Запустить PromptEar.exe`
 4. Дождаться установки (bootstrap — 1 раз, скачает модели ~1.5 GB)
