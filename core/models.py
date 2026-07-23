@@ -24,6 +24,7 @@ class PipelineConfig:
     multi_pass: bool = False
     initial_prompt: str | None = None
     qwen_available: bool = False
+    profile: str = "default"
 
 
 @dataclass

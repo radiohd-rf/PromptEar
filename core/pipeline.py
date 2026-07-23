@@ -134,7 +134,8 @@ class EnhanceStep(PipelineStep):
                 emit(LogEvent(f"    {msg}"))
 
             result.text = self._enhancer.enhance_multi_pass(
-                result.text, config.initial_prompt or "", progress_callback=mp_progress, cancel=cancel
+                result.text, config.initial_prompt or "", progress_callback=mp_progress,
+                cancel=cancel, profile=config.profile
             )
             emit(LogEvent("  Многопроходное улучшение завершено"))
         except Exception as exc:
@@ -161,11 +162,15 @@ class SaveStep(PipelineStep):
             return result
 
         filepath = result.audio.original_path or result.audio.path
-        out_path = filepath.with_suffix(f".{config.output_format}")
-        if config.output_format == "txt":
+        if config.profile == "summary":
+            out_path = filepath.with_name(f"{filepath.stem}_summary.md")
             save_txt(out_path, result.text)
-        elif config.output_format == "docx":
-            save_docx(out_path, result.text)
+        else:
+            out_path = filepath.with_suffix(f".{config.output_format}")
+            if config.output_format == "txt":
+                save_txt(out_path, result.text)
+            elif config.output_format == "docx":
+                save_docx(out_path, result.text)
         result.output_path = out_path
         emit(LogEvent(f"{filepath.name} -> {out_path.name}"))
         return result
