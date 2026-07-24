@@ -71,9 +71,9 @@ echo [4/6] Installing libraries...
 
 if exist "%APP_DIR%wheels\*.whl" (
     echo   Installing from local wheels...
-    "%PIP%" install --find-links "%APP_DIR%wheels" --quiet || (
+    "%PIP%" install --no-index --find-links "%APP_DIR%wheels" torch torchaudio flask pywebview faster-whisper Pillow python-docx requests --quiet || (
         echo   ERROR: pip install failed.
-        echo   Run manually: "%PIP%" install --find-links "%APP_DIR%wheels"
+        echo   Run manually: "%PIP%" install --no-index --find-links "%APP_DIR%wheels" torch torchaudio flask pywebview faster-whisper Pillow python-docx requests
         pause
         exit /b 1
     )
