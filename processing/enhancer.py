@@ -419,7 +419,7 @@ class OllamaEnhancer:
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nТекст:\n{text}"
-        return self._call_ollama(prompt)
+        return self._truncate_to_sentences(self._call_ollama(prompt), 5)
 
     def _pass_combine(self, text: str, topic: str) -> str:
         """Объединяет резюме чанков в одно связное резюме."""
@@ -427,7 +427,14 @@ class OllamaEnhancer:
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nРезюме фрагментов:\n{text}"
-        return self._call_ollama(prompt)
+        return self._truncate_to_sentences(self._call_ollama(prompt), 5)
+
+    @staticmethod
+    def _truncate_to_sentences(text: str, max_sentences: int = 5) -> str:
+        """Обрезает текст до max_sentences предложений."""
+        sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+        sentences = [s for s in sentences if s]
+        return " ".join(sentences[:max_sentences])
 
     @staticmethod
     def _result_too_short(result: str, original: str) -> bool:
