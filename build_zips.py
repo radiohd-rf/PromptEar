@@ -104,7 +104,6 @@ def _pip_download_packages(dest: Path) -> None:
         "pip",
         "download",
         *PIP_PACKAGES,
-        "--only-binary=:all:",
         "-d",
         str(dest),
     ]
