@@ -10,6 +10,7 @@ from collections.abc import Callable
 from threading import Event
 from typing import Any
 
+from core.detector import AudioDetector
 from core.events import (
     CancelledEvent,
     DoneEvent,
@@ -20,7 +21,6 @@ from core.events import (
     TranscribingEvent,
 )
 from core.models import AudioFile, PipelineConfig, TranscriptionResult
-from core.detector import AudioDetector
 from utils.files import save_docx, save_txt
 from utils.gpu import get_torch_device
 
@@ -163,14 +163,14 @@ class SaveStep(PipelineStep):
 
         filepath = result.audio.original_path or result.audio.path
         if config.profile == "summary":
-            out_path = filepath.with_name(f"{filepath.stem}_summary.md")
-            save_txt(out_path, result.text)
+            out_path = filepath.with_name(f"{filepath.stem}_summary.{config.output_format}")
         else:
             out_path = filepath.with_suffix(f".{config.output_format}")
-            if config.output_format == "txt":
-                save_txt(out_path, result.text)
-            elif config.output_format == "docx":
-                save_docx(out_path, result.text)
+
+        if config.output_format == "txt":
+            save_txt(out_path, result.text)
+        elif config.output_format == "docx":
+            save_docx(out_path, result.text)
         result.output_path = out_path
         emit(LogEvent(f"{filepath.name} -> {out_path.name}"))
         return result
