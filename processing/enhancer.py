@@ -19,6 +19,7 @@ from config import (
     OLLAMA_NUM_PREDICT,
     OLLAMA_TEMPERATURE,
     OLLAMA_TIMEOUT,
+    SUMMARY_CHUNK_SIZE,
 )
 from processing.topic import detect_topic
 
@@ -27,6 +28,7 @@ PASS_LABELS = {
     "pass2": "Стиль (грамматика, согласование)",
     "pass3": "Структура (абзацы, диалоги)",
     "pass4": "Резюме (выжимка)",
+    "pass5": "Комбинирование резюме",
 }
 
 
@@ -121,12 +123,24 @@ STRUCTURE_PROMPTS: dict[str, str] = {
 }
 
 SUMMARY_PROMPT = (
-    "Ты — редактор. Сделай краткую выжимку текста.\n\n"
+    "Ты — редактор. Сделай КРАТКУЮ выжимку.\n\n"
     "Правила:\n"
-    "- Напиши 3-5 предложений: о чём текст, кто говорит, ключевые факты\n"
+    "- Строго 3-5 предложений\n"
+    "- Не более 100 слов\n"
+    "- О чём текст, кто говорит, ключевые факты\n"
     "- Сохрани имена, даты, числа\n"
-    "- Не добавляй от себя интерпретаций и выводов\n"
-    "- Верни только выжимку, без вступлений и пояснений"
+    "- Не добавляй от себя\n"
+    "- Верни ТОЛЬКО выжимку"
+)
+
+COMBINE_PROMPT = (
+    "Объедини резюме фрагментов в одно связное резюме.\n\n"
+    "Правила:\n"
+    "- Строго 3-5 предложений\n"
+    "- Не более 100 слов\n"
+    "- Убери повторы\n"
+    "- Сохрани имена, даты, числа\n"
+    "- Верни ОДНО резюме"
 )
 
 PROMPT_PROFILES: dict[str, EnhancementProfile] = {
@@ -269,7 +283,8 @@ class OllamaEnhancer:
 
         profile_data = PROMPT_PROFILES.get(profile, PROMPT_PROFILES["default"])
 
-        chunks = self._chunk_text(text, ENHANCER_CHUNK_SIZE)
+        chunk_size = SUMMARY_CHUNK_SIZE if profile == "summary" else ENHANCER_CHUNK_SIZE
+        chunks = self._chunk_text(text, chunk_size)
         pass_defs = self._build_pass_defs(profile, profile_data)
         total_passes = len(pass_defs)
 
@@ -289,7 +304,7 @@ class OllamaEnhancer:
                     progress_callback(label)
                 try:
                     result = pass_fn(chunk, topic)
-                    if name != "summary" and self._result_too_short(result, chunk):
+                    if self._result_too_short(result, chunk):
                         if progress_callback:
                             progress_callback(
                                 "  Результат слишком короткий (<60% длины), сохранён предыдущий"
@@ -304,9 +319,22 @@ class OllamaEnhancer:
                 break
             processed.append(self._restore_speakers(chunk))
 
-        return "\n\n".join(processed)
+        combined = "\n\n".join(processed)
 
-    def _build_pass_defs(self, profile: str, profile_data: EnhancementProfile) -> list[tuple[str, callable]]:
+        if profile == "summary" and len(processed) > 1:
+            if progress_callback:
+                progress_callback("Комбинирование резюме фрагментов...")
+            try:
+                combined = self._pass_combine(combined, topic)
+            except Exception:
+                if progress_callback:
+                    progress_callback("  Ошибка комбинирования, сохранён предыдущий результат")
+
+        return combined
+
+    def _build_pass_defs(
+        self, profile: str, profile_data: EnhancementProfile
+    ) -> list[tuple[str, callable]]:
         """Собирает список (имя_прохода, функция) согласно профилю."""
         pass_defs = []
         for name in profile_data.passes:
@@ -314,10 +342,16 @@ class OllamaEnhancer:
                 pass_defs.append(("pass1", self._pass_cleanup))
             elif name == "style":
                 prompt = STYLE_PROMPTS.get(profile, STYLE_PROMPTS["default"])
-                pass_defs.append(("pass2", lambda t, tp, _p=prompt: self._pass_style(t, tp, _p)))
+                pass_defs.append((
+                    "pass2",
+                    lambda t, tp, _p=prompt: self._pass_style(t, tp, _p),
+                ))
             elif name == "structure":
                 prompt = STRUCTURE_PROMPTS.get(profile, STRUCTURE_PROMPTS["default"])
-                pass_defs.append(("pass3", lambda t, tp, _p=prompt: self._pass_structure(t, tp, _p)))
+                pass_defs.append((
+                    "pass3",
+                    lambda t, tp, _p=prompt: self._pass_structure(t, tp, _p),
+                ))
             elif name == "summary":
                 pass_defs.append(("pass4", self._pass_summary))
         return pass_defs
@@ -385,6 +419,14 @@ class OllamaEnhancer:
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nТекст:\n{text}"
+        return self._call_ollama(prompt)
+
+    def _pass_combine(self, text: str, topic: str) -> str:
+        """Объединяет резюме чанков в одно связное резюме."""
+        prompt = COMBINE_PROMPT
+        if topic:
+            prompt += f"\nТема: {topic}"
+        prompt += f"\n\nРезюме фрагментов:\n{text}"
         return self._call_ollama(prompt)
 
     @staticmethod

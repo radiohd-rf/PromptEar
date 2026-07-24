@@ -38,6 +38,7 @@ MULTI_PASS_MIN_RATIO = 0.6
 MULTI_PASS_MAX_RATIO = 1.4
 OLLAMA_NUM_PREDICT = -1  # unlimited output tokens
 ENHANCER_CHUNK_SIZE = 3000  # symbols per chunk for long texts
+SUMMARY_CHUNK_SIZE = 8000  # larger chunks for summary profile
 
 # ── GPU ─────────────────────────────────────────────────────────────────────
 NVIDIA_SMI_TIMEOUT = 5
