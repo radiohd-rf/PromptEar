@@ -10,7 +10,7 @@ class QueueMsg(Enum):
     LOG = auto()
     PROGRESS = auto()
     TRANSCRIBING = auto()
-    OLLAMA_READY = auto()
+    LLM_READY = auto()
     CUDA_INSTALLED = auto()
     DONE = auto()
     ERROR = auto()
@@ -41,8 +41,8 @@ class TranscribingEvent(PipelineEvent):
 
 
 @dataclass
-class OllamaReadyEvent(PipelineEvent):
-    ollama_ok: bool
+class LlmReadyEvent(PipelineEvent):
+    llm_ok: bool
     model_ok: bool
 
 

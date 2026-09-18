@@ -87,6 +87,10 @@ if exist "%APP_DIR%wheels\*.whl" (
 if %errorlevel% neq 0 (
     echo   Warning: pip install reported an error.
 )
+"%PIP%" install transformers huggingface-hub --quiet
+if %errorlevel% neq 0 (
+    echo   Warning: transformers not installed (SAGE engine disabled).
+)
 
 echo   Libraries installed
 
@@ -110,51 +114,42 @@ if %errorlevel% equ 0 (
 )
 
 :: ---------------------------------------------------------------
-:: 6. Check / install Ollama
+:: 6. Check / install llama.cpp (llama-server)
 :: ---------------------------------------------------------------
-echo [6/6] Checking Ollama...
+echo [6/6] Checking llama.cpp...
 
-where ollama >nul 2>&1
-if %errorlevel% equ 0 (
-    echo   Ollama already installed
+if exist "%APP_DIR%llama\llama-server.exe" (
+    echo   llama.cpp already ready
 ) else (
-    echo   Downloading Ollama...
-    curl -L -# -o "%TEMP%\OllamaSetup.exe" "https://ollama.com/download/OllamaSetup.exe"
-    if %errorlevel% neq 0 (
-        echo   ERROR: Failed to download Ollama.
+    echo   Downloading llama.cpp (CPU build)...
+    for /f "delims=" %%i in ('powershell -NoProfile -Command "try { (Invoke-RestMethod -Uri 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30' -TimeoutSec 10) | Where-Object { \$_.assets.name -match 'win-cpu-x64' } | Select-Object -First 1 -ExpandProperty tag_name } catch { }"') do set "LLAMA_RELEASE=%%i"
+    if "%LLAMA_RELEASE%"=="" set "LLAMA_RELEASE=b11034"
+    curl -L -# -o "%TEMP%\llama.zip" "https://github.com/ggml-org/llama.cpp/releases/download/%LLAMA_RELEASE%/llama-%LLAMA_RELEASE%-bin-win-cpu-x64.zip"
+    if not exist "%TEMP%\llama.zip" (
+        echo   ERROR: Failed to download llama.cpp.
         pause
         exit /b 1
     )
-    start /wait "" "%TEMP%\OllamaSetup.exe" /S
-    if %errorlevel% neq 0 (
-        echo   ERROR: Failed to install Ollama.
+    mkdir "%APP_DIR%llama" >nul 2>&1
+    powershell -NoProfile -Command "Expand-Archive -Path '%TEMP%\llama.zip' -DestinationPath '%APP_DIR%llama' -Force"
+    for /r "%APP_DIR%llama" %%f in (llama-server.exe) do set "FOUND_SERVER=%%f"
+    if defined FOUND_SERVER (
+        move /y "%FOUND_SERVER%" "%APP_DIR%llama\llama-server.exe" >nul 2>&1
+        echo   llama-server ready
+    ) else (
+        echo   ERROR: llama-server.exe not found in archive.
         pause
         exit /b 1
     )
-    echo   Ollama installed
 )
 
-:: Wait for Ollama to start
-echo   Waiting for Ollama...
-:wait_ollama
-ollama --version >nul 2>&1
-if %errorlevel% neq 0 (
-    timeout /t 3 /nobreak >nul
-    goto wait_ollama
-)
-
-:: Pull Qwen model
-echo   Checking qwen2.5:3b model...
-ollama list 2>nul | findstr "qwen2.5:3b" >nul
-if %errorlevel% equ 0 (
-    echo   qwen2.5:3b already pulled, skipping
+:: Check model
+echo   Checking model gemma-4-E2B...
+if exist "%APP_DIR%models\llm\gemma-4-E2B-it-UD-Q4_K_XL.gguf" (
+    echo   Model found
 ) else (
-    echo   Pulling qwen2.5:3b model...
-    ollama pull qwen2.5:3b
-)
-if %errorlevel% neq 0 (
-    echo   Warning: Failed to pull model.
-    echo   Run later: ollama pull qwen2.5:3b
+    echo   Model gemma-4-E2B not found.
+    echo   Put the GGUF into models\llm\ or run it later from the app.
 )
 
 :: ---------------------------------------------------------------
@@ -164,8 +159,8 @@ echo.
 echo === Setup complete! ===
 echo.
 echo Virtual env: %VENV_DIR%
-echo Ollama:      installed
-echo Qwen model:  qwen2.5:3b
+echo LLM engine:  llama.cpp (llama-server)
+echo Model:       gemma-4-E2B-it (models\llm)
 echo.
 echo Run: run.bat
 echo.

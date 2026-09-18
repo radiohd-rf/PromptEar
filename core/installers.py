@@ -1,24 +1,18 @@
-"""Установщики CUDA и Ollama (вынос из ui/root.py)."""
+"""Установщики CUDA и LLM-движков (llama.cpp / SAGE)."""
 
-import os
-import shutil
 import subprocess
 import sys
-import tempfile
 import threading
-import time
 from collections.abc import Callable
-
-import requests
 
 from core.events import (
     CudaInstalledEvent,
+    LlmReadyEvent,
     LogEvent,
-    OllamaReadyEvent,
     PipelineEvent,
     SetBusyEvent,
 )
-from processing.enhancer import OllamaEnhancer
+from processing.enhancer import BaseEnhancer
 
 
 class CudaInstaller:
@@ -104,33 +98,33 @@ class CudaInstaller:
             emit(SetBusyEvent(False))
 
 
-class OllamaInstaller:
-    """Скачивает и устанавливает Ollama, затем скачивает модель."""
+class LlamaCppInstaller:
+    """Установка llama.cpp (llama-server) и модели gemma-4-E2B."""
 
     @staticmethod
-    def check_ollama(
-        enhancer: OllamaEnhancer,
+    def check(
+        enhancer: BaseEnhancer,
         emit: Callable[[PipelineEvent], None],
         install_callback: Callable[[], None],
     ) -> None:
-        """Асинхронная проверка Ollama — запускает установку при необходимости."""
+        """Асинхронная проверка LLM-движка — запускает установку при необходимости."""
         def check():
             ok, model = enhancer.is_available()
             if ok and model:
-                emit(OllamaReadyEvent(True, True))
+                emit(LlmReadyEvent(True, True))
             elif ok and not model:
-                emit(OllamaReadyEvent(True, False))
+                emit(LlmReadyEvent(True, False))
             else:
-                emit(OllamaReadyEvent(False, False))
+                emit(LlmReadyEvent(False, False))
         threading.Thread(target=check, daemon=True).start()
 
     @staticmethod
     def install(
-        enhancer: OllamaEnhancer,
+        enhancer: BaseEnhancer,
         emit: Callable[[PipelineEvent], None],
     ) -> None:
-        """Скачивает Ollama и модель в фоновом потоке."""
-        emit(LogEvent("Скачивание Ollama..."))
+        """Скачивает llama.cpp и модель в фоновом потоке."""
+        emit(LogEvent("Скачивание llama.cpp..."))
         emit(SetBusyEvent(True))
 
         def install_worker():
@@ -138,11 +132,53 @@ class OllamaInstaller:
                 def on_progress(msg):
                     emit(LogEvent(msg))
                 enhancer.install(progress_callback=on_progress)
-                emit(OllamaReadyEvent(True, True))
+                emit(LlmReadyEvent(True, True))
             except Exception as exc:
-                emit(LogEvent(f"Ошибка установки Ollama: {exc}"))
-                emit(LogEvent("  Попробуйте: winget install Ollama"))
-                emit(OllamaReadyEvent(False, False))
+                emit(LogEvent(f"Ошибка установки llama.cpp: {exc}"))
+                emit(LogEvent("  Попробуйте скачать вручную: https://github.com/ggml-org/llama.cpp/releases"))
+                emit(LlmReadyEvent(False, False))
+            finally:
+                emit(SetBusyEvent(False))
+
+        threading.Thread(target=install_worker, daemon=True).start()
+
+
+class SageInstaller:
+    """Установка SAGE-1.7B (FRED-T5-1.7B) — скачивание модели с HuggingFace."""
+
+    @staticmethod
+    def check(
+        enhancer: BaseEnhancer,
+        emit: Callable[[PipelineEvent], None],
+        install_callback: Callable[[], None],
+    ) -> None:
+        def check():
+            ok, model = enhancer.is_available()
+            if ok and model:
+                emit(LlmReadyEvent(True, True))
+            elif ok and not model:
+                emit(LlmReadyEvent(True, False))
+            else:
+                emit(LlmReadyEvent(False, False))
+        threading.Thread(target=check, daemon=True).start()
+
+    @staticmethod
+    def install(
+        enhancer: BaseEnhancer,
+        emit: Callable[[PipelineEvent], None],
+    ) -> None:
+        emit(LogEvent("Скачивание SAGE-1.7B..."))
+        emit(SetBusyEvent(True))
+
+        def install_worker():
+            try:
+                def on_progress(msg):
+                    emit(LogEvent(msg))
+                enhancer.install(progress_callback=on_progress)
+                emit(LlmReadyEvent(True, True))
+            except Exception as exc:
+                emit(LogEvent(f"Ошибка установки SAGE: {exc}"))
+                emit(LlmReadyEvent(False, False))
             finally:
                 emit(SetBusyEvent(False))
 

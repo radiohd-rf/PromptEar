@@ -4,7 +4,6 @@ from pathlib import Path
 
 from config import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
 
-
 ALL_SUPPORTED = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
 
 

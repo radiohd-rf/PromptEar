@@ -1,5 +1,6 @@
 """Flask сервер PromptEar — API + SSE."""
 
+import contextlib
 import json
 import os
 import queue
@@ -9,22 +10,23 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
+from config import LLM_ENGINE
 from core.events import (
     CancelledEvent,
     DoneEvent,
     ErrorEvent,
+    LlmReadyEvent,
     LogEvent,
-    OllamaReadyEvent,
     ProgressEvent,
     SetBusyEvent,
     TranscribingEvent,
 )
 from core.models import AudioFile, PipelineConfig
 from core.pipeline import run_pipeline as run_pipeline_core
-from processing.enhancer import OllamaEnhancer
+from processing.enhancer import create_enhancer
 from processing.transcriber import Transcriber
-from utils.files import find_supported_files, is_video_file
 from utils.extract_audio import extract_audio
+from utils.files import find_supported_files, is_video_file
 from utils.gpu import detect_and_report
 from utils.logger import get_logger
 
@@ -57,10 +59,10 @@ def _event_to_dict(event) -> dict:
             }
         case TranscribingEvent():
             return {"type": "transcribing", "message": event.message}
-        case OllamaReadyEvent():
+        case LlmReadyEvent():
             return {
-                "type": "ollama_ready",
-                "ollama_ok": event.ollama_ok,
+                "type": "llm_ready",
+                "llm_ok": event.llm_ok,
                 "model_ok": event.model_ok,
             }
         case SetBusyEvent():
@@ -80,10 +82,8 @@ def _process_files(task_id: str) -> None:
     emit_queue = task["queue"]
 
     def emit(event):
-        try:
+        with contextlib.suppress(queue.Full):
             emit_queue.put_nowait(_event_to_dict(event))
-        except queue.Full:
-            pass
         event_str = _event_to_dict(event)
         logger.info(f"[{task_id}] {json.dumps(event_str, ensure_ascii=False)}")
 
@@ -98,18 +98,18 @@ def _process_files(task_id: str) -> None:
             output_dir=UPLOAD_DIR,
             multi_pass=True,
             initial_prompt=task.get("initial_prompt", "") or None,
-            qwen_available=True,
+            llm_available=False,
         )
 
         gpu_info = detect_and_report()
         emit(LogEvent(f"GPU: {json.dumps(gpu_info, ensure_ascii=False)}"))
-        device = gpu_info["device"]
 
         transcriber = Transcriber()
         enhancer = None
-        enhancer = OllamaEnhancer()
-        ollama_ok, model_ok = enhancer.is_available()
-        emit(OllamaReadyEvent(ollama_ok=ollama_ok, model_ok=model_ok))
+        enhancer = create_enhancer()
+        llm_ok, model_ok = enhancer.is_available()
+        emit(LlmReadyEvent(llm_ok=llm_ok, model_ok=model_ok))
+        config.llm_available = llm_ok and model_ok
 
         audio_files = []
         for f in files:
@@ -130,7 +130,7 @@ def _process_files(task_id: str) -> None:
             emit=emit,
             cancel=cancel,
             transcriber=transcriber,
-            enhancer=enhancer if ollama_ok and model_ok else None,
+            enhancer=enhancer if config.llm_available else None,
         )
 
         # удаляем загруженные исходные файлы (они не нужны, цель — docx)
@@ -194,7 +194,6 @@ def upload_files():
         "cancel": None,
         "multi_pass": True,
         "initial_prompt": request.form.get("initial_prompt", ""),
-        "qwen": True,
         "output_format": request.form.get("output_format", "docx"),
         "output_dir": UPLOAD_DIR,
         "original_videos": original_videos,
@@ -256,14 +255,14 @@ def gpu_info():
     return jsonify(info)
 
 
-@app.route("/api/ollama")
-def ollama_check():
+@app.route("/api/llm")
+def llm_check():
     try:
-        enhancer = OllamaEnhancer()
-        ollama_ok, model_ok = enhancer.is_available()
-        return jsonify({"ollama_ok": ollama_ok, "model_ok": model_ok})
+        enhancer = create_enhancer()
+        llm_ok, model_ok = enhancer.is_available()
+        return jsonify({"llm_ok": llm_ok, "model_ok": model_ok, "engine": LLM_ENGINE})
     except Exception as exc:
-        return jsonify({"ollama_ok": False, "model_ok": False, "error": str(exc)})
+        return jsonify({"llm_ok": False, "model_ok": False, "error": str(exc)})
 
 
 @app.route("/api/open-output")

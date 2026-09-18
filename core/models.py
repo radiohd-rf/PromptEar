@@ -1,6 +1,6 @@
 """Типизированные модели предметной области."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -23,7 +23,7 @@ class PipelineConfig:
     output_format: str = "docx"
     multi_pass: bool = False
     initial_prompt: str | None = None
-    qwen_available: bool = False
+    llm_available: bool = False
 
 
 @dataclass

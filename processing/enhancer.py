@@ -1,23 +1,37 @@
-"""Улучшение текста через Ollama + Qwen. 3-проходная система."""
+"""Улучшение текста через LLM-движок: llama.cpp (llama-server) или SAGE (T5).
+
+Единый интерфейс BaseEnhancer: llama-движок сохраняет 3-проходную систему,
+SAGE — однопроходный корректор орфографии/пунктуации/заглавных.
+"""
 
 import os
 import re
 import subprocess
-import tempfile
 import time
+from abc import ABC, abstractmethod
 from threading import Event
 
 import requests
 
 from config import (
     ENHANCER_CHUNK_SIZE,
+    LLAMA_DIR,
+    LLAMA_RELEASE,
+    LLAMA_SERVER_PORT,
+    LLM_BASE_URL,
+    LLM_CONTEXT,
+    LLM_ENGINE,
+    LLM_MODEL,
+    LLM_MODEL_PATH,
+    LLM_NUM_PREDICT,
+    LLM_RETRIES,
+    LLM_TEMPERATURE,
+    LLM_TIMEOUT,
     MULTI_PASS_MAX_RATIO,
     MULTI_PASS_MIN_RATIO,
-    OLLAMA_BASE_URL,
-    OLLAMA_MODEL,
-    OLLAMA_NUM_PREDICT,
-    OLLAMA_TEMPERATURE,
-    OLLAMA_TIMEOUT,
+    SAGE_HF_REPO,
+    SAGE_MAX_CHARS,
+    SAGE_MODEL_DIR,
 )
 from processing.topic import detect_topic
 
@@ -28,15 +42,38 @@ PASS_LABELS = {
 }
 
 
-class OllamaEnhancer:
-    """Класс для улучшения текста через Ollama + Qwen 2.5:3b."""
+class BaseEnhancer(ABC):
+    """Общий интерфейс улучшения текста."""
 
-    def __init__(self, model: str = OLLAMA_MODEL):
+    @abstractmethod
+    def is_available(self) -> tuple[bool, bool]:
+        """Возвращает (engine_ready, model_ready)."""
+
+    @abstractmethod
+    def enhance_multi_pass(
+        self,
+        text: str,
+        topic: str = "",
+        progress_callback=None,
+        cancel: Event | None = None,
+    ) -> str:
+        """Улучшает текст (полный режим)."""
+
+    @abstractmethod
+    def install(self, progress_callback=None) -> bool:
+        """Устанавливает движок и модель. True при успехе."""
+
+    @abstractmethod
+    def get_engine_name(self) -> str:
+        """Имя движка: 'llama' | 'sage'."""
+
+
+class LlamaCppEnhancer(BaseEnhancer):
+    """Улучшение текста через llama-server (OpenAI-совместимый API) + gemma-4-E2B."""
+
+    def __init__(self, model: str = LLM_MODEL):
         self.model = model
-        self.base_url = OLLAMA_BASE_URL
-        self._ollama_ok = False
-        self._model_ok = False
-        self.topic = ""
+        self.base_url = LLM_BASE_URL
         self._session: requests.Session | None = None
 
     def _get_session(self) -> requests.Session:
@@ -44,39 +81,22 @@ class OllamaEnhancer:
             self._session = requests.Session()
         return self._session
 
-    def is_available(self) -> tuple[bool, bool]:
-        """Проверяет, установлена ли Ollama и скачана ли модель.
+    def get_engine_name(self) -> str:
+        return "llama"
 
-        Возвращает (ollama_installed, model_downloaded).
+    def is_available(self) -> tuple[bool, bool]:
+        """Проверяет запущен ли llama-server и есть ли GGUF-файл.
+
+        Возвращает (server_ok, model_ok).
         """
         try:
-            r = subprocess.run(
-                ["ollama", "--version"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=10,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-            if r.returncode != 0:
-                return False, False
-        except FileNotFoundError:
+            r = requests.get(f"{self.base_url}/health", timeout=5)
+            server_ok = r.status_code == 200
+        except requests.RequestException:
+            server_ok = False
+        if not server_ok:
             return False, False
-
-        try:
-            r = subprocess.run(
-                ["ollama", "list"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=15,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-            return True, self.model in r.stdout
-        except Exception:
-            return True, False
+        return True, LLM_MODEL_PATH.exists()
 
     # ── Одиночный проход (для обратной совместимости) ──────────────────────
 
@@ -98,20 +118,7 @@ class OllamaEnhancer:
         if context:
             prompt += f"\nКонтекст: {context}"
         prompt += f"\n\nТекст:\n{text}"
-
-        payload = {
-            "model": self.model,
-            "prompt": prompt,
-            "temperature": OLLAMA_TEMPERATURE,
-            "stream": False,
-        }
-        r = self._get_session().post(
-            f"{self.base_url}/api/generate",
-            json=payload,  # type: ignore[arg-type]
-            timeout=300,
-        )
-        r.raise_for_status()
-        return r.json()["response"].strip()
+        return self._call_llm(prompt)
 
     # ── 3-проходная система ───────────────────────────────────────────────
 
@@ -119,7 +126,9 @@ class OllamaEnhancer:
     def _chunk_text(text: str, max_size: int) -> list[str]:
         """Режет текст на чанки по границам предложений, каждый ≤ max_size символов."""
         sentences = re.split(r"(?<=[.!?])\s+", text)
-        chunks, current, curr_len = [], [], 0
+        chunks: list[str] = []
+        current: list[str] = []
+        curr_len = 0
         for sent in sentences:
             sent = sent.strip()
             if not sent:
@@ -133,8 +142,13 @@ class OllamaEnhancer:
             chunks.append(" ".join(current))
         return chunks or [text]
 
-    def enhance_multi_pass(self, text: str, topic: str = "", progress_callback=None,
-                           cancel: Event | None = None) -> str:
+    def enhance_multi_pass(
+        self,
+        text: str,
+        topic: str = "",
+        progress_callback=None,
+        cancel: Event | None = None,
+    ) -> str:
         """3-проходное улучшение: очистка → стиль → структура.
 
         Длинные тексты дробятся на чанки, каждый обрабатывается независимо.
@@ -187,22 +201,34 @@ class OllamaEnhancer:
 
     # ── Отдельные проходы ──────────────────────────────────────────────────
 
-    def _call_ollama(self, prompt: str, timeout: int = OLLAMA_TIMEOUT) -> str:
-        """Отправляет запрос в Ollama и возвращает ответ."""
+    def _call_llm(self, prompt: str, timeout: int = LLM_TIMEOUT) -> str:
+        """Отправляет запрос в llama-server (OpenAI API) и возвращает ответ.
+
+        При таймауте делает повтор (фикс бага #15).
+        """
         payload = {
-            "model": self.model,
-            "prompt": prompt,
-            "temperature": OLLAMA_TEMPERATURE,
-            "num_predict": OLLAMA_NUM_PREDICT,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": LLM_TEMPERATURE,
+            "max_tokens": LLM_NUM_PREDICT,
             "stream": False,
         }
-        r = self._get_session().post(
-            f"{self.base_url}/api/generate",
-            json=payload,  # type: ignore[arg-type]
-            timeout=timeout,
-        )
-        r.raise_for_status()
-        return r.json()["response"].strip()
+        url = f"{self.base_url}/v1/chat/completions"
+        attempts = LLM_RETRIES + 1
+        last_exc: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                r = self._get_session().post(
+                    url,
+                    json=payload,
+                    timeout=timeout,
+                )
+                r.raise_for_status()
+                return r.json()["choices"][0]["message"]["content"].strip()
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                last_exc = exc
+                if attempt < attempts - 1:
+                    time.sleep(2)
+        raise RuntimeError(f"llama-server недоступен: {last_exc}")
 
     def _pass_cleanup(self, text: str, topic: str) -> str:
         """Проход 1: орфография, пунктуация, повторы."""
@@ -224,7 +250,7 @@ class OllamaEnhancer:
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nТекст:\n{text}"
-        return self._call_ollama(prompt)
+        return self._call_llm(prompt)
 
     def _pass_style(self, text: str, topic: str) -> str:
         """Проход 2: грамматика, стиль, согласование."""
@@ -247,7 +273,7 @@ class OllamaEnhancer:
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nТекст:\n{text}"
-        return self._call_ollama(prompt)
+        return self._call_llm(prompt)
 
     def _pass_structure(self, text: str, topic: str) -> str:
         """Проход 3: разбивка на абзацы, оформление диалогов."""
@@ -268,11 +294,11 @@ class OllamaEnhancer:
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nТекст:\n{text}"
-        return self._call_ollama(prompt)
+        return self._call_llm(prompt)
 
     @staticmethod
     def _result_too_short(result: str, original: str) -> bool:
-        """Проверяет, не упростил ли Qwen текст сильнее допустимого.
+        """Проверяет, не упростила ли модель текст сильнее допустимого.
 
         Возвращает True, если длина результата <60% от оригинала
         или если результат длиннее оригинала >140% (модель «фантазирует»).
@@ -286,7 +312,7 @@ class OllamaEnhancer:
     def _protect_speakers(text: str) -> str:
         """Заменяет диалоговые тире на явные метки [СПИКЕР N]:.
 
-        Чтобы Qwen не удалял реплики, превращаем «— текст» в «[СПИКЕР 1]: текст».
+        Чтобы модель не удаляла реплики, превращаем «— текст» в «[СПИКЕР 1]: текст».
         """
         lines = text.split("\n")
         speaker_count = 0
@@ -309,15 +335,19 @@ class OllamaEnhancer:
     # ── Установка ──────────────────────────────────────────────────────────
 
     def install(self, progress_callback=None) -> bool:
-        """Скачивает и устанавливает Ollama, затем скачивает модель.
+        """Скачивает llama.cpp (win-cpu), распаковывает и запускает llama-server.
 
         Возвращает True при успехе.
         """
         if progress_callback:
-            progress_callback("Скачивание Ollama...")
+            progress_callback("Скачивание llama.cpp...")
 
-        url = "https://ollama.com/download/OllamaSetup.exe"
-        setup_path = os.path.join(tempfile.gettempdir(), "OllamaSetup.exe")
+        url = (
+            f"https://github.com/ggml-org/llama.cpp/releases/download/"
+            f"{LLAMA_RELEASE}/llama-{LLAMA_RELEASE}-bin-win-cpu-x64.zip"
+        )
+        zip_path = LLAMA_DIR / "llama.zip"
+        LLAMA_DIR.mkdir(parents=True, exist_ok=True)
 
         max_retries = 3
         for attempt in range(1, max_retries + 1):
@@ -326,7 +356,7 @@ class OllamaEnhancer:
                     progress_callback(f"  Попытка {attempt}/{max_retries}...")
                 r = requests.get(url, stream=True, timeout=(15, 120))
                 r.raise_for_status()
-                with open(setup_path, "wb") as f:
+                with open(zip_path, "wb") as f:
                     for chunk in r.iter_content(65536):
                         if chunk:
                             f.write(chunk)
@@ -339,34 +369,158 @@ class OllamaEnhancer:
                 time.sleep(3)
 
         if progress_callback:
-            progress_callback("Установка Ollama...")
-        subprocess.run([setup_path, "/S"], check=True, timeout=300)
+            progress_callback("Распаковка llama.cpp...")
+        import zipfile
 
-        if progress_callback:
-            progress_callback("Ожидание запуска Ollama...")
-        for _ in range(30):
-            check = subprocess.run(
-                ["ollama", "--version"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=5,
-            )
-            if check.returncode == 0:
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(LLAMA_DIR)
+        zip_path.unlink()
+
+        server_exe = LLAMA_DIR / "llama-server.exe"
+        if not server_exe.exists():
+            for candidate in LLAMA_DIR.rglob("llama-server.exe"):
+                server_exe = candidate
                 break
-            time.sleep(2)
+        if not server_exe.exists():
+            raise RuntimeError("llama-server.exe не найден в архиве llama.cpp")
 
-        if progress_callback:
-            progress_callback(f"Скачивание модели {self.model}...")
-        subprocess.run(
-            ["ollama", "pull", self.model],
-            check=True,
-            timeout=600,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+        if not LLM_MODEL_PATH.exists():
+            raise RuntimeError(
+                f"Модель не найдена: {LLM_MODEL_PATH}. Положите GGUF в папку models/llm/"
+            )
+
+        return self._start_server(server_exe, progress_callback)
+
+    def _start_server(self, server_exe, progress_callback=None) -> bool:
+        """Запускает llama-server и ждёт /health."""
+        if self.is_available()[0]:
+            return True
+
+        cmd = [
+            str(server_exe),
+            "-m", str(LLM_MODEL_PATH),
+            "-c", str(LLM_CONTEXT),
+            "--host", "127.0.0.1",
+            "--port", str(LLAMA_SERVER_PORT),
+            "--threads", str(max(1, os.cpu_count() or 4)),
+        ]
+        subprocess.Popen(
+            cmd,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
-        return True
+        if progress_callback:
+            progress_callback("Ожидание запуска llama-server...")
+        for _ in range(60):
+            try:
+                r = requests.get(f"{LLM_BASE_URL}/health", timeout=2)
+                if r.status_code == 200:
+                    return True
+            except requests.RequestException:
+                pass
+            time.sleep(2)
+        return False
+
+
+class SageEnhancer(BaseEnhancer):
+    """Однопроходный корректор русского текста на базе FRED-T5-1.7B (SAGE).
+
+    Исправляет орфографию, пунктуацию и заглавные буквы. Без промптов.
+    """
+
+    def __init__(self, model_dir: os.PathLike | str = SAGE_MODEL_DIR):
+        self.model_dir = os.fspath(model_dir)
+        self._tokenizer = None
+        self._model = None
+
+    def get_engine_name(self) -> str:
+        return "sage"
+
+    def is_available(self) -> tuple[bool, bool]:
+        """Проверяет наличие transformers и скачанной модели."""
+        import importlib.util
+
+        has_tf = importlib.util.find_spec("transformers") is not None
+        model_file = SAGE_MODEL_DIR / "model.safetensors"
+        return has_tf, model_file.exists()
+
+    def _load(self):
+        """Загружает токенизатор и модель (лениво, один раз)."""
+        if self._model is not None:
+            return
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model_dir)
+        self._model = AutoModelForSeq2SeqLM.from_pretrained(self.model_dir)
+
+    def enhance_multi_pass(
+        self,
+        text: str,
+        topic: str = "",
+        progress_callback=None,
+        cancel: Event | None = None,
+    ) -> str:
+        """Однопроходная коррекция. Чанки ≤ SAGE_MAX_CHARS (вход T5 ≤512 токенов)."""
+        if not text.strip():
+            return text
+
+        self._load()
+        assert self._tokenizer is not None and self._model is not None
+
+        chunks = LlamaCppEnhancer._chunk_text(text, SAGE_MAX_CHARS)
+        processed = []
+        for idx, chunk in enumerate(chunks):
+            if cancel is not None and cancel.is_set():
+                break
+            if progress_callback:
+                label = f"SAGE: чанк {idx + 1}/{len(chunks)}"
+                progress_callback(label)
+            try:
+                corrected = self._correct_chunk(chunk)
+                if not corrected or len(corrected) < len(chunk) * MULTI_PASS_MIN_RATIO:
+                    corrected = chunk
+            except Exception:
+                corrected = chunk
+            processed.append(corrected)
+
+        return "\n\n".join(processed)
+
+    def _correct_chunk(self, chunk: str) -> str:
+        assert self._tokenizer is not None and self._model is not None
+        inputs = self._tokenizer(chunk, return_tensors="pt", truncation=True, max_length=512)
+        outputs = self._model.generate(
+            **inputs,
+            max_new_tokens=512,
+            temperature=0.0,
+        )
+        return self._tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+
+    def install(self, progress_callback=None) -> bool:
+        """Скачивает ai-forever/sage-v1.1.0 в папку models/sage."""
+        if progress_callback:
+            progress_callback(f"Скачивание модели {SAGE_HF_REPO}...")
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError:
+            raise RuntimeError(
+                "huggingface_hub не установлен. Установите: pip install huggingface_hub"
+            ) from None
+
+        SAGE_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        snapshot_download(
+            repo_id=SAGE_HF_REPO,
+            local_dir=SAGE_MODEL_DIR,
+            allow_patterns=["*.json", "*.txt", "*.safetensors", "*.model"],
+        )
+        return self.is_available()[1]
+
+
+def create_enhancer(engine: str | None = None) -> BaseEnhancer:
+    """Фабрика движков по конфигу."""
+    engine = engine or LLM_ENGINE
+    if engine == "sage":
+        return SageEnhancer()
+    return LlamaCppEnhancer()

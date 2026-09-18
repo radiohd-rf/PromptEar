@@ -10,6 +10,7 @@ from collections.abc import Callable
 from threading import Event
 from typing import Any
 
+from core.detector import AudioDetector
 from core.events import (
     CancelledEvent,
     DoneEvent,
@@ -20,7 +21,6 @@ from core.events import (
     TranscribingEvent,
 )
 from core.models import AudioFile, PipelineConfig, TranscriptionResult
-from core.detector import AudioDetector
 from utils.files import save_docx, save_txt
 from utils.gpu import get_torch_device
 
@@ -108,7 +108,7 @@ class TranscribeStep(PipelineStep):
 
 
 class EnhanceStep(PipelineStep):
-    """Улучшение текста через Qwen."""
+    """Улучшение текста через LLM."""
 
     def __init__(self, enhancer: Any) -> None:
         self._enhancer = enhancer
@@ -124,17 +124,20 @@ class EnhanceStep(PipelineStep):
         emit: Callable[[PipelineEvent], None],
         cancel: Event,
     ) -> TranscriptionResult:
-        if not result.text or not config.qwen_available:
+        if not result.text or not config.llm_available:
             return result
 
-        emit(LogEvent("  Многопроходное улучшение Qwen (3 прохода)..."))
+        emit(LogEvent("  Многопроходное улучшение (3 прохода)..."))
         try:
 
             def mp_progress(msg: str) -> None:
                 emit(LogEvent(f"    {msg}"))
 
             result.text = self._enhancer.enhance_multi_pass(
-                result.text, config.initial_prompt or "", progress_callback=mp_progress, cancel=cancel
+                result.text,
+                config.initial_prompt or "",
+                progress_callback=mp_progress,
+                cancel=cancel,
             )
             emit(LogEvent("  Многопроходное улучшение завершено"))
         except Exception as exc:

@@ -8,6 +8,11 @@ __pycache__/
 venv/
 .env/
 
+# Runtime LLM artifacts (llama.cpp + model caches)
+llama/
+models/
+llama_server.pid
+
 # Build artifacts
 dist/
 build/
@@ -48,7 +53,8 @@ _tmp_*/
 Thumbs.db
 .DS_Store
 
-# Build artifacts
+# Stale artifacts
 PromptEar-v0.11.0-cu126/
+PromptEar-v0.12.0-cu126/
 *.zip
 

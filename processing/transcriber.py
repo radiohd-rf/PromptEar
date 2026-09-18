@@ -6,6 +6,7 @@ import sys
 import threading
 from pathlib import Path
 from threading import Event
+from typing import Any
 
 from config import WHISPER_MODEL
 
@@ -30,7 +31,7 @@ class Transcriber:
     """Класс для транскрипции аудио через faster-whisper с фоновой загрузкой модели."""
 
     def __init__(self):
-        self._model = None
+        self._model: Any = None
         self._lock = threading.Lock()
 
     def load_model(self, model_name: str = WHISPER_MODEL) -> None:

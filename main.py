@@ -16,7 +16,9 @@ from web.server import app
 
 
 def _find_free_port() -> int:
-    with socketserver.TCPServer(("127.0.0.1", 0), None) as s:
+    with socketserver.TCPServer(
+        ("127.0.0.1", 0), socketserver.BaseRequestHandler
+    ) as s:
         return s.server_address[1]
 
 
@@ -38,7 +40,7 @@ def main() -> None:
 
     import webview
 
-    window = webview.create_window(
+    webview.create_window(
         "PromptEar",
         url,
         width=860,

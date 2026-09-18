@@ -44,19 +44,18 @@ SOURCE_DIRS = [
 ]
 
 EXCLUDE_SUFFIXES = {".pyc", ".pyo"}
-EXCLUDE_DIRS = {"__pycache__", ".git", ".github", ".pytest_cache", ".ruff_cache", "__pycache__"}
+EXCLUDE_DIRS = {"__pycache__", ".git", ".github", ".pytest_cache", ".ruff_cache"}
 
 REQUIRED_PACKAGES = ["torch", "torchaudio"]
 FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+LLAMA_GGUF = Path(r"G:\models\e2b\gemma-4-E2B-it-UD-Q4_K_XL.gguf")
 
 
 def _excluded(path: Path, rel: Path) -> bool:
     for part in rel.parts:
         if part in EXCLUDE_DIRS:
             return True
-    if rel.suffix in EXCLUDE_SUFFIXES:
-        return True
-    return False
+    return rel.suffix in EXCLUDE_SUFFIXES
 
 
 def _pip_download(index_url: str, dest: Path) -> None:
@@ -82,7 +81,8 @@ def _pip_download(index_url: str, dest: Path) -> None:
     print(f"  pip download -> {dest}")
     subprocess.run(cmd, check=True, env=env)
     whls = list(dest.glob("*.whl"))
-    print(f"  Скачано {len(whls)} wheel-файлов ({sum(f.stat().st_size for f in whls) / 1024 / 1024:.0f} MB)")
+    total_mb = sum(f.stat().st_size for f in whls) / 1024 / 1024
+    print(f"  Скачано {len(whls)} wheel-файлов ({total_mb:.0f} MB)")
 
 
 def _download_ffmpeg(dest: Path) -> None:
@@ -108,12 +108,58 @@ def _download_ffmpeg(dest: Path) -> None:
     print(f"  ffmpeg.exe ({size_mb:.0f} MB)")
 
 
+def _download_llama_cpp(dest: Path) -> None:
+    """Скачивает llama.cpp (win-cpu) и разворачивает в dest/llama целиком.
+
+    Важно: llama-server.exe в новых сборках — стаб, вся логика в DLL рядом,
+    поэтому копируется весь каталог.
+    """
+    server_exe = dest / "llama" / "llama-server.exe"
+    if server_exe.exists():
+        print("  llama-server.exe уже есть")
+        return
+    print("  Скачивание llama.cpp...")
+    zip_path = dest.parent / "llama.zip"
+    release = os.environ.get("LLAMA_RELEASE", "b11034")
+    url = (
+        f"https://github.com/ggml-org/llama.cpp/releases/download/"
+        f"{release}/llama-{release}-bin-win-cpu-x64.zip"
+    )
+    subprocess.run(["curl", "-sS", "-L", "-o", str(zip_path), url], check=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        with zipfile.ZipFile(str(zip_path), "r") as zf:
+            zf.extractall(tmp)
+        src_dir = (Path(tmp) / "llama-server.exe").parent
+        if not (src_dir / "llama-server.exe").exists():
+            raise RuntimeError("llama-server.exe не найден в архиве llama.cpp")
+        (dest / "llama").mkdir(parents=True, exist_ok=True)
+        for item in src_dir.iterdir():
+            shutil.copy2(item, dest / "llama" / item.name)
+    zip_path.unlink()
+
+
+def _embed_gguf(dest: Path) -> None:
+    """Копирует gemma-4-E2B-it GGUF в dest/models/llm (если файл доступен)."""
+    llm_dir = dest / "models" / "llm"
+    target = llm_dir / LLAMA_GGUF.name
+    if target.exists():
+        print("  GGUF уже есть")
+        return
+    if LLAMA_GGUF.exists():
+        llm_dir.mkdir(parents=True, exist_ok=True)
+        size_mb = LLAMA_GGUF.stat().st_size / 1024 / 1024
+        print(f"  Копирование GGUF ({size_mb:.0f} MB)...")
+        shutil.copy2(LLAMA_GGUF, target)
+    else:
+        print("  ⚠ GGUF gemma-4-E2B не найден — модель не встроена (скачается на лету)")
+
+
 def build_variant(name: str, index_url: str) -> None:
     print(f"\n=== Сборка {name.upper()} ===")
 
     build_dir = ROOT / f"_build_{name}"
     wheels_dir = build_dir / "wheels"
-    zip_path = ROOT / f"PromptEar-v0.11.0-{name}.zip"
+    zip_path = ROOT / f"PromptEar-v0.13.0-{name}.zip"
 
     # Очистка
     if build_dir.exists():
@@ -137,14 +183,20 @@ def build_variant(name: str, index_url: str) -> None:
         src = ROOT / dname
         if src.exists():
             dst = build_dir / dname
-            shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__", ".git", ".github", ".pytest_cache", ".ruff_cache"))
+            shutil.copytree(
+                src,
+                dst,
+                ignore=shutil.ignore_patterns(
+                    "__pycache__", ".git", ".github", ".pytest_cache", ".ruff_cache"
+                ),
+            )
 
     # 3. Скомпилировать launcher.cs → Запустить PromptEar.exe
     print("  Компиляция лаунчера...")
-    windir = os.environ.get("windir", "C:\\Windows")
+    _windir = os.environ.get("WINDIR", "C:\\Windows")
     csc_paths = [
-        Path(windir) / "Microsoft.NET" / "Framework64" / "v4.0.30319" / "csc.exe",
-        Path(windir) / "Microsoft.NET" / "Framework" / "v4.0.30319" / "csc.exe",
+        Path(_windir) / "Microsoft.NET" / "Framework64" / "v4.0.30319" / "csc.exe",
+        Path(_windir) / "Microsoft.NET" / "Framework" / "v4.0.30319" / "csc.exe",
     ]
     csc = None
     for p in csc_paths:
@@ -172,7 +224,12 @@ def build_variant(name: str, index_url: str) -> None:
     # 4. Скачать ffmpeg.exe
     _download_ffmpeg(build_dir)
 
-    # 5. Создать zip
+    # 5. Встроить llama.cpp (только CPU) и модель gemma-4-E2B
+    if name == "cpu":
+        _download_llama_cpp(build_dir)
+        _embed_gguf(build_dir)
+
+    # 6. Создать zip
     print(f"  Создание {zip_path.name}...")
     total = 0
     with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:

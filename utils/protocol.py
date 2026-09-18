@@ -9,7 +9,7 @@ class QueueMsg(Enum):
     LOG = auto()  # str — сообщение в лог
     PROGRESS = auto()  # (current, total, filename, eta)
     TRANSCRIBING = auto()  # str — "Транскрибация: file.mp3"
-    OLLAMA_READY = auto()  # (ollama_ok, model_ok)
+    LLM_READY = auto()  # (llm_ok, model_ok)
     CUDA_INSTALLED = auto()  # bool
     DONE = auto()  # str — финальное сообщение
     ERROR = auto()  # str — сообщение об ошибке

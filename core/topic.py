@@ -36,7 +36,7 @@ class TopicDetector:
         self._keywords = value
 
     def detect(self, text: str) -> str:
-        """Определяет тему текста. Возвращает одну из: история, образование, техника, повседневный."""
+        """Определяет тему текста: история, образование, техника, повседневный."""
         text_lower = text.lower()
         scores = {}
         for topic, keywords in self._keywords.items():

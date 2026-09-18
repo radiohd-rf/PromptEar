@@ -133,13 +133,13 @@ function handleEvent(msg) {
       document.getElementById('run-btn').disabled = msg.busy;
       break;
 
-    case 'ollama_ready':
-      if (!msg.ollama_ok) {
-        addLog('⚠ Ollama не найден. Улучшение текста отключено.');
+    case 'llm_ready':
+      if (!msg.llm_ok) {
+        addLog('⚠ LLM-движок не найден. Улучшение текста отключено.');
       } else if (!msg.model_ok) {
-        addLog('⚠ Модель Qwen не найдена. Улучшение может не работать.');
+        addLog('⚠ Модель не найдена. Улучшение может не работать.');
       } else {
-        addLog('✅ Qwen доступен');
+        addLog('✅ LLM доступен');
       }
       break;
 
@@ -228,16 +228,17 @@ async function init() {
   }
 
   try {
-    const ollamaResp = await fetch('/api/ollama');
-    const ollama = await ollamaResp.json();
-    const el = document.getElementById('ollama-status');
-    if (ollama.ollama_ok) {
-      el.textContent = `Qwen: ${ollama.model_ok ? '✅' : '⚠ модель не найдена'}`;
+    const llmResp = await fetch('/api/llm');
+    const llm = await llmResp.json();
+    const el = document.getElementById('llm-status');
+    const engine = llm.engine ? ` (${llm.engine})` : '';
+    if (llm.llm_ok) {
+      el.textContent = `LLM${engine}: ${llm.model_ok ? '✅' : '⚠ модель не найдена'}`;
     } else {
-      el.textContent = 'Ollama: не обнаружен';
+      el.textContent = `LLM${engine}: не обнаружен`;
     }
   } catch (_) {
-    document.getElementById('ollama-status').textContent = 'Ollama: ошибка';
+    document.getElementById('llm-status').textContent = 'LLM: ошибка';
   }
 }
 
