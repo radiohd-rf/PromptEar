@@ -69,23 +69,22 @@ echo [3/6] Updating pip...
 
 echo [4/6] Installing libraries...
 
-:: Install torch from local wheels if present
 if exist "%APP_DIR%wheels\*.whl" (
-    echo   Installing torch from local wheels...
-    "%PIP%" install --find-links "%APP_DIR%wheels" torch torchaudio --quiet
-    if %errorlevel% neq 0 (
-        echo   Warning: torch wheel installation failed
-    ) else (
-        echo   torch installed from local wheels
+    echo   Installing from local wheels...
+    "%PIP%" install --no-index --find-links "%APP_DIR%wheels" torch torchaudio flask pywebview faster-whisper Pillow python-docx requests --quiet || (
+        echo   ERROR: pip install failed.
+        echo   Run manually: "%PIP%" install --no-index --find-links "%APP_DIR%wheels" torch torchaudio flask pywebview faster-whisper Pillow python-docx requests
+        pause
+        exit /b 1
     )
 ) else (
-    echo   No local wheels found. torch must be installed separately.
-)
-
-:: Install remaining packages
-"%PIP%" install flask pywebview faster-whisper Pillow python-docx requests --quiet
-if %errorlevel% neq 0 (
-    echo   Warning: pip install reported an error.
+    echo   No local wheels found, installing from PyPI...
+    "%PIP%" install torch torchaudio --index-url https://download.pytorch.org/whl/cpu --quiet || (
+        echo   Warning: torch install failed
+    )
+    "%PIP%" install flask pywebview faster-whisper Pillow python-docx requests --quiet || (
+        echo   Warning: some packages failed to install
+    )
 )
 "%PIP%" install transformers huggingface-hub --quiet
 if %errorlevel% neq 0 (

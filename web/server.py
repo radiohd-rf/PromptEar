@@ -137,7 +137,7 @@ def _process_files(task_id: str) -> None:
             output_dir=UPLOAD_DIR,
             multi_pass=True,
             initial_prompt=task.get("initial_prompt", "") or None,
-            llm_available=False,
+llm_available=False,
             enhance_mode=task.get("enhance_mode", "auto"),
             temp_dir=TEMP_DIR / task_id,
         )
@@ -245,7 +245,7 @@ def upload_files():
         "multi_pass": True,
         "initial_prompt": request.form.get("initial_prompt", ""),
         "output_format": request.form.get("output_format", "docx"),
-        "enhance_mode": request.form.get("enhance_mode", "auto"),
+"enhance_mode": request.form.get("enhance_mode", "auto"),
         "output_dir": UPLOAD_DIR,
         "original_videos": original_videos,
         "uploaded_files": saved,

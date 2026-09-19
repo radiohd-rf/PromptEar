@@ -46,7 +46,17 @@ SOURCE_DIRS = [
 EXCLUDE_SUFFIXES = {".pyc", ".pyo"}
 EXCLUDE_DIRS = {"__pycache__", ".git", ".github", ".pytest_cache", ".ruff_cache"}
 
-REQUIRED_PACKAGES = ["torch", "torchaudio"]
+TORCH_PACKAGES = ["torch", "torchaudio"]
+
+PIP_PACKAGES = [
+    "flask",
+    "pywebview",
+    "faster-whisper",
+    "Pillow",
+    "python-docx",
+    "requests",
+]
+
 FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 LLAMA_GGUF = Path(r"G:\models\e2b\gemma-4-E2B-it-UD-Q4_K_XL.gguf")
 
@@ -58,9 +68,8 @@ def _excluded(path: Path, rel: Path) -> bool:
     return rel.suffix in EXCLUDE_SUFFIXES
 
 
-def _pip_download(index_url: str, dest: Path) -> None:
-    """Скачивает torch + torchaudio с зависимостями в dest."""
-    # Перенаправляем TEMP на диск сборки (C: может быть мал для torch 2.5 GB)
+def _pip_download_torch(index_url: str, dest: Path) -> None:
+    """Скачивает torch + torchaudio с зависимостями из variant-индекса (cpu/cu126)."""
     tmpdir = str(dest.parent / "_pip_temp")
     os.makedirs(tmpdir, exist_ok=True)
     env = {**os.environ, "TEMP": tmpdir, "TMP": tmpdir}
@@ -69,7 +78,7 @@ def _pip_download(index_url: str, dest: Path) -> None:
         "-m",
         "pip",
         "download",
-        *REQUIRED_PACKAGES,
+        *TORCH_PACKAGES,
         "--index-url",
         index_url,
         "--trusted-host",
@@ -78,7 +87,27 @@ def _pip_download(index_url: str, dest: Path) -> None:
         "-d",
         str(dest),
     ]
-    print(f"  pip download -> {dest}")
+    print(f"  pip download torch -> {dest}")
+    subprocess.run(cmd, check=True, env=env)
+    whls = list(dest.glob("*.whl"))
+    print(f"  Скачано {len(whls)} wheel-файлов ({sum(f.stat().st_size for f in whls) / 1024 / 1024:.0f} MB)")
+
+
+def _pip_download_packages(dest: Path) -> None:
+    """Скачивает flask, faster-whisper и остальные зависимости из PyPI."""
+    tmpdir = str(dest.parent / "_pip_temp")
+    os.makedirs(tmpdir, exist_ok=True)
+    env = {**os.environ, "TEMP": tmpdir, "TMP": tmpdir}
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "download",
+        *PIP_PACKAGES,
+        "-d",
+        str(dest),
+    ]
+    print(f"  pip download packages -> {dest}")
     subprocess.run(cmd, check=True, env=env)
     whls = list(dest.glob("*.whl"))
     total_mb = sum(f.stat().st_size for f in whls) / 1024 / 1024
@@ -159,7 +188,7 @@ def build_variant(name: str, index_url: str) -> None:
 
     build_dir = ROOT / f"_build_{name}"
     wheels_dir = build_dir / "wheels"
-    zip_path = ROOT / f"PromptEar-v0.13.0-{name}.zip"
+zip_path = ROOT / f"PromptEar-v0.13.0-{name}.zip"
 
     # Очистка
     if build_dir.exists():
@@ -167,8 +196,9 @@ def build_variant(name: str, index_url: str) -> None:
     build_dir.mkdir(parents=True)
     wheels_dir.mkdir()
 
-    # 1. Скачать wheels
-    _pip_download(index_url, wheels_dir)
+    # 1. Скачать wheels (torch из variant-индекса, остальное из PyPI)
+    _pip_download_torch(index_url, wheels_dir)
+    _pip_download_packages(wheels_dir)
 
     # 2. Скопировать исходники
     print("  Копирование исходников...")

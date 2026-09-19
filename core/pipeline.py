@@ -185,7 +185,7 @@ class EnhanceStep(PipelineStep):
                 ))
 
             result.text = self._enhancer.enhance_multi_pass(
-                result.text,
+result.text,
                 config.initial_prompt or "",
                 progress_callback=mp_progress,
                 cancel=cancel,
@@ -222,6 +222,7 @@ class SaveStep(PipelineStep):
         filepath = result.audio.original_path or result.audio.path
         out_path = filepath.with_suffix(f".{config.output_format}")
         if config.output_format == "docx":
+            save_docx(out_path, result.text)
             save_docx(out_path, result.text)
         else:
             save_text_output(
