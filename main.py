@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """PromptEar — точка входа (Web + PyWebView)."""
 
+import contextlib
 import ctypes
 import os
 import socketserver
@@ -27,21 +28,15 @@ ICON_BIG = 1
 
 def _set_app_user_model_id() -> None:
     """Отдельный AppUserModelID — иначе таскбар группирует окно под иконку pythonw."""
-    try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "PromptEar.desktop"
-        )
-    except Exception:
-        pass
+    with contextlib.suppress(Exception):
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("PromptEar.desktop")
 
 
 def _apply_taskbar_icon(window_title: str, icon_path: Path) -> None:
     """Ставит иконку класса окна — именно её показывает таскбар."""
     user32 = ctypes.windll.user32
 
-    hicon = user32.LoadImageW(
-        None, str(icon_path), IMAGE_ICON, 0, 0, LR_LOADFROMFILE
-    )
+    hicon = user32.LoadImageW(None, str(icon_path), IMAGE_ICON, 0, 0, LR_LOADFROMFILE)
     if not hicon:
         return
 
@@ -75,9 +70,7 @@ def _apply_taskbar_icon(window_title: str, icon_path: Path) -> None:
 
 
 def _find_free_port() -> int:
-    with socketserver.TCPServer(
-        ("127.0.0.1", 0), socketserver.BaseRequestHandler
-    ) as s:
+    with socketserver.TCPServer(("127.0.0.1", 0), socketserver.BaseRequestHandler) as s:
         return s.server_address[1]
 
 
@@ -107,8 +100,9 @@ def main() -> None:
     webview.create_window(
         "PromptEar",
         url,
-        width=1150,
-        height=760,
+        width=860,
+        height=720,
+        min_size=(860, 720),
         resizable=True,
     )
 

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
-from config import LLM_ENGINE, OUTPUT_FORMATS, TEMP_DIR
+from config import LLM_ENGINE, TEMP_DIR
 from core.events import (
     CancelledEvent,
     DoneEvent,
@@ -38,6 +38,7 @@ from utils.extract_audio import extract_audio
 from utils.files import find_supported_files, is_video_file, save_docx, save_text_output
 from utils.gpu import detect_and_report
 from utils.logger import get_logger
+from web.theme import build_theme
 
 logger = get_logger()
 
@@ -151,7 +152,7 @@ def _process_files(task_id: str) -> None:
             output_dir=UPLOAD_DIR,
             multi_pass=True,
             initial_prompt=task.get("initial_prompt", "") or None,
-llm_available=False,
+            llm_available=False,
             enhance_mode=task.get("enhance_mode", "auto"),
             temp_dir=TEMP_DIR / task_id,
         )
@@ -168,18 +169,18 @@ llm_available=False,
         config.llm_available = llm_ok and model_ok
 
         audio_files = []
+        display_names = task.get("display_names", {})
         for f in files:
             orig = original_videos.get(f)
-            audio_files.append(AudioFile(
-                path=Path(f),
-                original_path=Path(orig) if orig else None,
-                temp_path=Path(f) if Path(f) in task["temp_wavs"] else None,
-            ))
-        emit(
-            LogEvent(
-                f"Добавлено {len(audio_files)} файлов"
+            audio_files.append(
+                AudioFile(
+                    path=Path(f),
+                    original_path=Path(orig) if orig else None,
+                    temp_path=Path(f) if Path(f) in task["temp_wavs"] else None,
+                    display_name=display_names.get(f, Path(f).name),
+                )
             )
-        )
+        emit(LogEvent(f"Добавлено {len(audio_files)} файлов"))
 
         run_pipeline_core(
             files=audio_files,
@@ -213,6 +214,16 @@ def index():
     return send_from_directory(str(WEB_DIR), "index.html")
 
 
+@app.route("/api/theme")
+def api_theme():
+    """Динамическая Material You палитра (системная тема + акцент Windows/обои).
+
+    ?dark=1|0 — принудительно тёмная/светлая; без параметра — системная.
+    """
+    dark = request.args.get("dark")
+    return jsonify(build_theme(None if dark is None else dark == "1"))
+
+
 @app.route("/api/files", methods=["POST"])
 def upload_files():
     """Принимает файлы, создаёт задачу, запускает обработку."""
@@ -224,12 +235,14 @@ def upload_files():
     task_temp_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
     saved = []
+    display_names: dict[str, str] = {}
     for f in request.files.getlist("files"):
         if f.filename:
             safe_name = re.sub(r'[<>:"/\\|?*]+', "_", f.filename)
             dest = UPLOAD_DIR / f"{stamp}-{safe_name}"
             f.save(str(dest))
             saved.append(str(dest))
+            display_names[str(dest)] = f.filename
 
     if not saved:
         return jsonify({"error": "no valid files"}), 400
@@ -248,6 +261,7 @@ def upload_files():
                 all_supported.append(wav_path)
                 original_videos[str(wav_path)] = str(p)
                 temp_wavs.add(wav_path)
+                display_names[str(wav_path)] = display_names.get(str(p), p.name)
             except (ValueError, RuntimeError) as exc:
                 app.logger.warning(f"Video extraction failed for {p.name}: {exc}")
                 return jsonify({"error": str(exc)}), 400
@@ -261,9 +275,10 @@ def upload_files():
         "multi_pass": True,
         "initial_prompt": request.form.get("initial_prompt", ""),
         "output_format": request.form.get("output_format", "docx"),
-"enhance_mode": request.form.get("enhance_mode", "auto"),
+        "enhance_mode": request.form.get("enhance_mode", "auto"),
         "output_dir": UPLOAD_DIR,
         "original_videos": original_videos,
+        "display_names": display_names,
         "uploaded_files": saved,
         "temp_wavs": {str(p) for p in temp_wavs},
         "status": "processing",
@@ -273,11 +288,13 @@ def upload_files():
     t = threading.Thread(target=_process_files, args=(task_id,), daemon=True)
     t.start()
 
-    return jsonify({
-        "task_id": task_id,
-        "file_count": len(all_audio),
-        "enhance_mode": tasks[task_id]["enhance_mode"],
-    })
+    return jsonify(
+        {
+            "task_id": task_id,
+            "file_count": len(all_audio),
+            "enhance_mode": tasks[task_id]["enhance_mode"],
+        }
+    )
 
 
 @app.route("/api/status/<task_id>")
@@ -342,10 +359,12 @@ def task_results(task_id):
         return jsonify({"error": "task not found"}), 404
     results = []
     for result in task.get("results", {}).values():
-        results.append({
-            "filename": result.audio.path.name,
-            "text": result.text,
-        })
+        results.append(
+            {
+                "filename": result.audio.display_name or result.audio.path.name,
+                "text": result.text,
+            }
+        )
     return jsonify({"results": results})
 
 
@@ -359,7 +378,11 @@ def enhance_file(task_id, filename):
         return jsonify({"error": "task not found"}), 404
 
     result = next(
-        (r for r in task.get("results", {}).values() if r.audio.path.name == filename),
+        (
+            r
+            for r in task.get("results", {}).values()
+            if (r.audio.display_name or r.audio.path.name) == filename
+        ),
         None,
     )
     if result is None:
@@ -467,21 +490,3 @@ def open_output():
             return jsonify({"ok": True})
     subprocess.Popen(["explorer", str(UPLOAD_DIR)])
     return jsonify({"ok": True})
-
-
-@app.route("/api/history")
-def history():
-    """Готовые файлы-результаты из output/ — видимость прошлых обработок (#14)."""
-    entries = []
-    for p in sorted(UPLOAD_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-        if not p.is_file():
-            continue
-        if p.suffix.lower().lstrip(".") not in OUTPUT_FORMATS:
-            continue
-        st = p.stat()
-        entries.append({
-            "name": p.name,
-            "size": st.st_size,
-            "modified": st.st_mtime,
-        })
-    return jsonify({"files": entries})

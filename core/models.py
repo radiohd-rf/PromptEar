@@ -14,6 +14,7 @@ class AudioFile:
     preprocessed_path: Path | None = None
     temp_path: Path | None = None
     skipped: bool = False
+    display_name: str | None = None
 
 
 @dataclass
@@ -26,9 +27,9 @@ class Segment:
 
 
 # Режимы улучшения
-ENHANCE_NONE = "none"     # только транскрибация, без ИИ
-ENHANCE_AUTO = "auto"     # улучшение сразу после транскрибации
-ENHANCE_ASK = "ask"       # после транскрибации — кнопка «Улучшить с ИИ»
+ENHANCE_NONE = "none"  # только транскрибация, без ИИ
+ENHANCE_AUTO = "auto"  # улучшение сразу после транскрибации
+ENHANCE_ASK = "ask"  # после транскрибации — кнопка «Улучшить с ИИ»
 ENHANCE_MODES = (ENHANCE_NONE, ENHANCE_AUTO, ENHANCE_ASK)
 
 

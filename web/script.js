@@ -3,7 +3,7 @@
 let files = [];
 let taskId = null;
 let eventSource = null;
-let isDark = true;
+let isDark = null;            // null = системная тема; true/false — переопределено юзером
 let enhanceMode = 'auto';
 let currentFileName = null;
 let liveFile = null;
@@ -19,10 +19,76 @@ const statusLabels = {
   skipped: 'Пропущено',
 };
 
-function toggleTheme() {
-  isDark = !isDark;
-  document.body.classList.toggle('light', !isDark);
-  document.getElementById('theme-toggle').textContent = isDark ? '☀️' : '🌙';
+/* ── Материальная палитра (Material You) ─────────────────── */
+
+const THEME_ATTR = 'data-theme';
+
+function applyThemeTokens(t) {
+  document.documentElement.setAttribute(THEME_ATTR, t.theme);
+  for (const [k, v] of Object.entries(t.tokens)) {
+    document.documentElement.style.setProperty(k, v);
+  }
+}
+
+async function applyPalette(darkOverride) {
+  let url = '/api/theme';
+  if (darkOverride !== undefined && darkOverride !== null) {
+    url += `?dark=${darkOverride ? '1' : '0'}`;
+  }
+  try {
+    const t = await (await fetch(url)).json();
+    applyThemeTokens(t);
+    return t.dark;
+  } catch (_) {
+    // оффлайн/сервер недоступен — фолбэк-токены из style.css
+    return document.documentElement.getAttribute(THEME_ATTR) === 'dark';
+  }
+}
+
+function preferredTheme() {
+  const saved = localStorage.getItem('promptear-theme');
+  return saved === 'dark' || saved === 'light' ? saved : null;
+}
+
+function initTheme() {
+  const saved = preferredTheme();
+  if (saved) {
+    document.documentElement.setAttribute('style', '');  // сбросить inline-токены
+    applyPalette(saved === 'dark').then(d => { isDark = d; });
+  } else {
+    applyPalette().then(d => { isDark = d; });
+  }
+}
+
+// Смена темы/обоев Windows: поллинг системной палитры (focus в WebView2
+// ненадёжен). Применяем токены только при реальном изменении сигнатуры.
+let lastThemeSig = '';
+
+async function pollTheme() {
+  const saved = preferredTheme();
+  const forced = saved !== null;
+  const url = '/api/theme' + (forced ? `?dark=${saved === 'dark' ? '1' : '0'}` : '');
+  try {
+    const t = await (await fetch(url)).json();
+    const sig = t.theme + '|' + t.seed + (forced ? '|forced' : '');
+    if (sig !== lastThemeSig) {
+      lastThemeSig = sig;
+      applyThemeTokens(t);
+      isDark = t.dark;
+    }
+  } catch (_) {
+    // сеть недоступна — тихо пропускаем
+  }
+}
+
+setInterval(pollTheme, 3000);
+
+async function toggleTheme() {
+  const next = !isDark;
+  localStorage.setItem('promptear-theme', next ? 'dark' : 'light');
+  lastThemeSig = '';
+  const t = await applyPalette(next);
+  isDark = t;
 }
 
 /* ── Утилиты ─────────────────────────────────────────────── */
@@ -78,7 +144,6 @@ function removeFile(idx) {
 
 function renderFileList() {
   const list = document.getElementById('file-list');
-  const count = document.getElementById('file-count');
 
   if (files.length === 0) {
     document.getElementById('drop-text').textContent = 'Перетащите аудиофайлы сюда';
@@ -87,8 +152,6 @@ function renderFileList() {
     document.getElementById('drop-text').textContent = 'Перетащите ещё файлы';
   }
 
-  count.textContent = `Выбрано: ${files.length} файлов`;
-
   list.innerHTML = files.map((f, i) => {
     const st = fileStatuses[f.name] || 'queued';
     const clickable = st !== 'queued';
@@ -96,6 +159,7 @@ function renderFileList() {
     const selected = f.name === currentFileName && clickable;
     return `<li class="file-item ${clickable ? 'clickable' : ''} ${selected ? 'selected' : ''}"
       data-name="${escapeHtml(f.name)}" onclick="selectFile('${escapeJs(f.name)}')">
+      <span class="file-num">${i + 1}.</span>
       <span class="file-name">${escapeHtml(f.name)}</span>
       <span class="file-size">${formatSize(f.size)}</span>
       <span class="status status-${st}">${statusLabels[st] || 'В очереди'}</span>
@@ -197,7 +261,12 @@ function handleEvent(msg) {
       setLiveFile(liveFile);
       fileTexts[liveFile] = msg.text;
       fileBadges[liveFile] = 'Черновик (Whisper)';
-      setResultText(msg.text, false);
+      if (msg.final) {
+        finishStreaming(msg.text, false);
+      } else {
+        setStreamingText(msg.text);
+        updateBadge('Черновик (Whisper)');
+      }
       if (msg.final && enhanceMode === 'ask') {
         showEnhanceButton();
       }
@@ -205,6 +274,27 @@ function handleEvent(msg) {
 
     case 'enhancing':
       showEnhanceProgress(msg.active_pass, msg.total_passes);
+      if (msg.active_pass === 1) {
+        // Проход 1 начался: черновик whisper должен быть допечатан.
+        // Если whisper уже доложил весь текст, но печать не успела —
+        // плавно добираем оставшееся, а не показываем резко.
+        const el = document.getElementById('result-text');
+        const draft = fileTexts[liveFile] || '';
+        if (draft && typingStarted && typeTarget && draft.length > Math.max(typeShownLen, el.textContent.length)) {
+          typeTarget = draft;
+          typeFinishing = true;
+          startTypingTimer();
+        } else {
+          resetTyping();
+          el.textContent = draft;
+          el.scrollTop = el.scrollHeight;
+        }
+        updateBadge('Улучшение ИИ');
+      } else if (lastPassText != null) {
+        // предыдущий проход завершён — его полный текст мы уже получили,
+        // плавно переходим: мигание → затухание → появление
+        startPassTransition(lastPassText);
+      }
       break;
 
     case 'enhancing_stream':
@@ -212,7 +302,9 @@ function handleEvent(msg) {
       setLiveFile(liveFile);
       fileTexts[liveFile] = msg.text;
       fileBadges[liveFile] = 'Улучшение ИИ';
-      setResultText(msg.text, false);
+      // не печатаем по токенам: копим полный текст прохода,
+      // он появится целиком на переходе к следующему проходу
+      lastPassText = msg.text;
       break;
 
     case 'result':
@@ -221,7 +313,7 @@ function handleEvent(msg) {
       fileTexts[liveFile] = msg.text;
       fileBadges[liveFile] = 'Улучшено ИИ';
       hideEnhanceProgress();
-      setResultText(msg.text, true);
+      startPassTransition(msg.text);
       break;
 
     case 'file_status':
@@ -352,6 +444,151 @@ function closeHelp() {
   document.getElementById('help-overlay').style.display = 'none';
 }
 
+/* ── Печать текста в лайве (плавная, без видимых пауз) ──
+   Скорость = средний темп прихода текста с начала потока (стабильный, сам
+   уточняется каждым батчем). У конца имеющихся данных печать плавно
+   замедляется («тормозит»), растягивая остаток на паузу, пока whisper
+   генерирует следующий сегмент — видимых остановок нет. На final событии
+   текст показывается мгновенно. */
+
+let typeTimer = null;
+let typeTarget = null;
+let typeShownLen = 0;     // сколько символов уже показано (дробное)
+let emaRate = null;       // chars/ms — средний темп прихода с старта потока
+let typingStarted = false;
+let streamStartAt = 0;    // момент прихода первого текста
+let typeFinishing = false; // пришёл final — добираем оставшийся хвост быстро, но плавно
+let pendingText = null;    // следующий проход геммы ждёт, пока текущий допечатается
+let pendingPass = null;    // «Проход N/M» ждёт, пока текущий текст допечатается
+let lastPassText = null;   // полный текст последнего полученного прохода геммы
+
+const TYPE_TICK_MS = 16;   // тик ~60 Гц
+const BASE_RATE = 0.014;   // chars/ms пока нет данных — печатная скорость ~14 с/с
+const MAX_RATE = 0.03;     // верхняя граница (30 симв/с)
+const FINISH_DURATION_MS = 400; // за сколько добирать хвост при смене прохода (~0.4 сек)
+
+function setStreamingText(text) {
+  const el = document.getElementById('result-text');
+  const shown = el.textContent;
+  // поток нарастает — это продолжение текущей выдачи
+  if (typeTarget && text.startsWith(shown) && text.length >= shown.length) {
+    const now = performance.now();
+    typeTarget = text;
+    if (!typingStarted) {
+      // первый батч: начало потока, печатаем сразу с базовой скоростью
+      typingStarted = true;
+      streamStartAt = now;
+      typeShownLen = 0;
+      startTypingTimer();
+      return;
+    }
+    // уточняем средний темп по всему потоку (не дёргается от пауз между сегментами)
+    const elapsed = now - streamStartAt;
+    if (elapsed > 1500) {
+      emaRate = Math.max(BASE_RATE, Math.min(MAX_RATE, text.length / elapsed));
+    }
+    if (typeShownLen < text.length && !typeTimer) startTypingTimer();
+    return;
+  }
+  // новый поток (или текст сброшен) — начинаем сначала.
+  // Но если печатается предыдущая версия и это новый проход геммы —
+  // добираем текущую быстро (finishing), новую печатаем после.
+  if (pendingText) {
+    pendingText = text;
+    return;
+  }
+  if (typingStarted && typeTarget && typeShownLen < typeTarget.length) {
+    pendingText = text;
+    typeFinishing = true;
+    startTypingTimer();
+    return;
+  }
+  resetTyping();
+  el.textContent = '';
+  if (text.length > 0) {
+    typeTarget = text;
+    typingStarted = true;
+    streamStartAt = performance.now();
+    typeShownLen = 0;
+    startTypingTimer();
+  }
+}
+
+function startTypingTimer() {
+  stopTyping();
+  typeTimer = setInterval(typeTick, TYPE_TICK_MS);
+}
+
+function typeTick() {
+  const tgt = typeTarget;
+  if (!tgt) { stopTyping(); return; }
+  let rate = emaRate != null ? emaRate : BASE_RATE;
+  const backlog = tgt.length - typeShownLen;
+  if (typeFinishing) {
+    // смена прохода: добираем оставшееся за ~0.4 сек независимо от размера
+    if (backlog > 1) rate = Math.min(2.0, Math.max(BASE_RATE, backlog / FINISH_DURATION_MS));
+  }
+  typeShownLen = Math.min(tgt.length, typeShownLen + rate * TYPE_TICK_MS);
+  const el = document.getElementById('result-text');
+  el.textContent = tgt.slice(0, Math.floor(typeShownLen));
+  el.scrollTop = el.scrollHeight;
+  if (typeShownLen >= tgt.length) {
+    stopTyping();
+    if (pendingPass) renderEnhanceProgress(pendingPass.active, pendingPass.total);
+    if (pendingText) {
+      // предыдущий проход добран до конца — печатаем следующий проход геммы
+      const next = pendingText;
+      pendingText = null;
+      typeTarget = next;
+      typeShownLen = 0;
+      typeFinishing = false;
+      emaRate = null;
+      streamStartAt = performance.now();
+      startTypingTimer();
+    }
+  }
+}
+
+function resetTyping() {
+  stopTyping();
+  typeTarget = null;
+  typeShownLen = 0;
+  emaRate = null;
+  typingStarted = false;
+  streamStartAt = 0;
+  typeFinishing = false;
+  pendingText = null;
+  pendingPass = null;
+  lastPassText = null;
+  if (passTransitionTimer) {
+    clearTimeout(passTransitionTimer);
+    passTransitionTimer = null;
+  }
+  const el = document.getElementById('result-text');
+  el.classList.remove('pass-blink', 'pass-fade-out', 'pass-fade-in');
+}
+
+function stopTyping() {
+  if (typeTimer) { clearInterval(typeTimer); typeTimer = null; }
+}
+
+// Приход финального события: печатаем оставшийся хвост равномерно за ~2 сек
+// вместо мгновенного скачка (иначе в переходе whisper→gemma всё «допрыгивает»).
+function finishStreaming(text, improved) {
+  const el = document.getElementById('result-text');
+  updateBadge(improved ? 'Улучшено ИИ' : 'Черновик (Whisper)');
+  // если печать уже шла и текст просто нарос — плавно добираем хвост
+  if (typeTarget && typingStarted && text.length > typeShownLen) {
+    typeTarget = text;
+    typeFinishing = true;
+    startTypingTimer();
+    return;
+  }
+  // иначе (текст не рос, печать не началась) — показать сразу
+  resetTyping();
+  el.textContent = text;
+}
+
 /* ── Live panel ──────────────────────────────────────────── */
 
 function showLivePanel() {
@@ -375,12 +612,24 @@ function updateBadge(text) {
 }
 
 function setResultText(text, improved) {
+  resetTyping();
   const el = document.getElementById('result-text');
   el.textContent = text;
   updateBadge(improved ? 'Улучшено ИИ' : (text ? 'Черновик (Whisper)' : 'Черновик'));
 }
 
 function showEnhanceProgress(activePass, totalPasses) {
+  // номер прохода сервер шлёт в момент старта прохода, раньше его текста —
+  // не показываем, пока дописывается предыдущий проход
+  if (typingStarted && typeShownLen < (typeTarget ? typeTarget.length : 0)) {
+    pendingPass = { active: activePass, total: totalPasses };
+    return;
+  }
+  renderEnhanceProgress(activePass, totalPasses);
+}
+
+function renderEnhanceProgress(activePass, totalPasses) {
+  pendingPass = null;
   const wrap = document.getElementById('enhance-progress');
   wrap.style.display = 'flex';
   const bar = document.getElementById('enhance-progress-bar');
@@ -390,7 +639,37 @@ function showEnhanceProgress(activePass, totalPasses) {
 }
 
 function hideEnhanceProgress() {
+  pendingPass = null;
   document.getElementById('enhance-progress').style.display = 'none';
+}
+
+/* ── Переход между проходами геммы: мигание → затухание → появление ── */
+
+let passTransitionTimer = null;
+
+function startPassTransition(newText) {
+  const el = document.getElementById('result-text');
+  resetTyping();
+  if (passTransitionTimer) clearTimeout(passTransitionTimer);
+  // 1. текущий текст мигает ~5 сек (проход N завершён, обрабатываем результат)
+  el.classList.remove('pass-fade-out', 'pass-fade-in');
+  el.classList.add('pass-blink');
+  passTransitionTimer = setTimeout(() => {
+    // 2. затухание: текст на секунду исчезает
+    el.classList.remove('pass-blink');
+    el.classList.add('pass-fade-out');
+    passTransitionTimer = setTimeout(() => {
+      // 3. появляется полный текст нового прохода
+      el.classList.remove('pass-fade-out');
+      el.textContent = newText;
+      el.scrollTop = el.scrollHeight;
+      el.classList.add('pass-fade-in');
+      passTransitionTimer = setTimeout(() => {
+        el.classList.remove('pass-fade-in');
+        passTransitionTimer = null;
+      }, 700);
+    }, 1000);
+  }, 5000);
 }
 
 function showEnhanceButton() {
@@ -416,7 +695,7 @@ async function enhanceDraft() {
   const btn = document.getElementById('enhance-btn');
   if (!btn) return;
   btn.disabled = true;
-  btn.textContent = 'Улучшаем…';
+  setBtnLabel(btn, 'Улучшаем…');
   showEnhanceProgress(1, 3);
   try {
     const resp = await fetch(`/api/enhance/${taskId}/${encodeURIComponent(currentFileName)}`, { method: 'POST' });
@@ -434,9 +713,16 @@ async function enhanceDraft() {
     addLog(`❌ ${err.message}`);
   } finally {
     btn.disabled = false;
-    btn.textContent = '✨ Улучшить с ИИ';
+    setBtnLabel(btn, 'Улучшить с ИИ');
     hideEnhanceButton();
   }
+}
+
+function setBtnLabel(btn, text) {
+  // сохраняем inline-SVG иконку: меняем только текстовый узел
+  const icon = btn.querySelector('svg');
+  btn.textContent = text;
+  if (icon) btn.prepend(icon);
 }
 
 async function awaitSyncAskResult() {
@@ -465,7 +751,6 @@ async function awaitSyncAskResult() {
 
 function showSpinner() {
   document.getElementById('thinking-spinner').style.display = '';
-  document.getElementById('run-btn').textContent = '▶ Запуск';
 }
 
 function hideSpinner() {
@@ -488,56 +773,40 @@ function openOutputFolder() {
   fetch('/api/open-output');
 }
 
-/* ── История прошлых обработок (#14) ─────────────────────── */
-
-function toggleHistory() {
-  const list = document.getElementById('history-list');
-  const on = list.style.display !== 'none';
-  list.style.display = on ? 'none' : '';
-  document.getElementById('history-toggle').textContent = on ? '▸' : '▾';
-}
-
-async function loadHistory() {
-  const count = document.getElementById('history-count');
-  const list = document.getElementById('history-list');
-  try {
-    const resp = await fetch('/api/history');
-    const data = await resp.json();
-    const files = data.files || [];
-    count.textContent = files.length ? `(${files.length})` : '';
-    if (files.length === 0) {
-      list.innerHTML = '<li class="history-empty">Пока нет готовых файлов</li>';
-      list.style.display = '';
-      document.getElementById('history-toggle').textContent = '▾';
-      return;
-    }
-    list.innerHTML = files.map(f => `
-      <li data-name="${escapeHtml(f.name)}" title="Открыть папку">
-        <span class="history-name">${escapeHtml(f.name)}</span>
-        <span class="history-size">${formatSize(f.size)}</span>
-      </li>`).join('');
-    list.querySelectorAll('li:not(.history-empty)').forEach(li => {
-      li.addEventListener('click', () => openHistoryFile(li.dataset.name));
-    });
-  } catch (_) {
-    count.textContent = '';
+function toggleLogs() {
+  const overlay = document.getElementById('logs-overlay');
+  const open = overlay.style.display !== 'none';
+  overlay.style.display = open ? 'none' : '';
+  if (!open) {
+    const log = document.getElementById('log');
+    log.scrollTop = log.scrollHeight;
   }
 }
 
-function openHistoryFile(name) {
-  fetch(`/api/open-output?select=${encodeURIComponent(name)}`);
+function closeLogs() {
+  document.getElementById('logs-overlay').style.display = 'none';
 }
 
 /* ── Инициализация ──────────────────────────────────────── */
 
+function syncFileListHeight() {
+  const drop = document.getElementById('drop-zone');
+  const container = document.getElementById('file-list-container');
+  if (drop && container) {
+    container.style.height = drop.offsetHeight + 'px';
+  }
+}
+
 async function init() {
-  loadHistory();
+  initTheme();
+  syncFileListHeight();
   try {
     const gpuResp = await fetch('/api/gpu');
     const gpu = await gpuResp.json();
-    document.getElementById('gpu-status').textContent =
+    const el = document.getElementById('gpu-status');
+    el.textContent =
       `GPU: ${gpu.has_nvidia_gpu ? 'NVIDIA' : 'не обнаружена'} | Torch: ${gpu.cuda_available ? 'CUDA' : 'CPU'}`;
-    if (gpu.cuda_available) document.getElementById('gpu-status').style.color = 'var(--success)';
+    el.classList.toggle('off', !gpu.cuda_available);
   } catch (_) {
     document.getElementById('gpu-status').textContent = 'GPU: ошибка проверки';
   }
@@ -548,9 +817,10 @@ async function init() {
     const el = document.getElementById('llm-status');
     const engine = llm.engine ? ` (${llm.engine})` : '';
     if (llm.llm_ok) {
-      el.textContent = `LLM${engine}: ${llm.model_ok ? '✅' : '⚠ модель не найдена'}`;
+      el.textContent = `LLM${engine}: ${llm.model_ok ? 'модель найдена' : 'модель не найдена'}`;
     } else {
       el.textContent = `LLM${engine}: не обнаружен`;
+      el.classList.add('off');
     }
   } catch (_) {
     document.getElementById('llm-status').textContent = 'LLM: ошибка';
@@ -559,14 +829,19 @@ async function init() {
 
 document.addEventListener('DOMContentLoaded', init);
 
+window.addEventListener('resize', () => syncFileListHeight());
+
 document.body.addEventListener('dragover', e => e.preventDefault());
 document.body.addEventListener('drop', e => e.preventDefault());
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    const overlay = document.getElementById('help-overlay');
-    if (overlay.style.display !== 'none') {
+    const help = document.getElementById('help-overlay');
+    const logs = document.getElementById('logs-overlay');
+    if (help.style.display !== 'none') {
       closeHelp();
+    } else if (logs.style.display !== 'none') {
+      closeLogs();
     }
   }
 });

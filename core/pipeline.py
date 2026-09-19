@@ -49,13 +49,11 @@ class PipelineStep(ABC):
         config: PipelineConfig,
         emit: Callable[[PipelineEvent], None],
         cancel: Event,
-    ) -> TranscriptionResult:
-        ...
+    ) -> TranscriptionResult: ...
 
     @property
     @abstractmethod
-    def name(self) -> str:
-        ...
+    def name(self) -> str: ...
 
 
 class DetectPreprocessStep(PipelineStep):
@@ -122,7 +120,7 @@ class TranscribeStep(PipelineStep):
         if config.initial_prompt:
             kwargs["initial_prompt"] = config.initial_prompt
 
-        filename = result.audio.path.name
+        filename = result.audio.display_name or result.audio.path.name
         emit(FileStatusEvent(filename=filename, status="transcribing"))
 
         def on_segment(accumulated: str) -> None:
@@ -165,7 +163,7 @@ class EnhanceStep(PipelineStep):
         if getattr(result.audio, "skipped", False):
             return result
 
-        filename = result.audio.path.name
+        filename = result.audio.display_name or result.audio.path.name
         emit(FileStatusEvent(filename=filename, status="enhancing"))
         emit(LogEvent("  Многопроходное улучшение (3 прохода)..."))
         try:
@@ -177,15 +175,17 @@ class EnhanceStep(PipelineStep):
                     emit(EnhancingEvent(int(m.group(1)), int(m.group(2))))
 
             def mp_stream(text_so_far: str, pass_no: int = 0) -> None:
-                emit(EnhancingStreamEvent(
-                    filename=filename,
-                    text=text_so_far,
-                    active_pass=pass_no,
-                    final=False,
-                ))
+                emit(
+                    EnhancingStreamEvent(
+                        filename=filename,
+                        text=text_so_far,
+                        active_pass=pass_no,
+                        final=False,
+                    )
+                )
 
             result.text = self._enhancer.enhance_multi_pass(
-result.text,
+                result.text,
                 config.initial_prompt or "",
                 progress_callback=mp_progress,
                 cancel=cancel,
@@ -216,7 +216,8 @@ class SaveStep(PipelineStep):
         cancel: Event,
     ) -> TranscriptionResult:
         if not result.text:
-            emit(LogEvent(f"{result.audio.path.name} — пустой результат"))
+            name = result.audio.display_name or result.audio.path.name
+            emit(LogEvent(f"{name} — пустой результат"))
             return result
 
         filepath = result.audio.original_path or result.audio.path
@@ -235,7 +236,8 @@ class SaveStep(PipelineStep):
         result.output_path = out_path
         self._result_store[str(result.audio.path)] = result
         status = "skipped" if result.audio.skipped else "done"
-        emit(FileStatusEvent(filename=result.audio.path.name, status=status))
+        filename = result.audio.display_name or result.audio.path.name
+        emit(FileStatusEvent(filename=filename, status=status))
         emit(LogEvent(f"{filepath.name} -> {out_path.name}"))
         return result
 
@@ -266,8 +268,8 @@ class AudioPipeline:
     def __init__(self, steps: list[PipelineStep] | None = None) -> None:
         self.steps = steps or [
             DetectPreprocessStep(),
-            TranscribeStep(None),   # будет заменён в run()
-            EnhanceStep(None),      # будет заменён в run()
+            TranscribeStep(None),  # будет заменён в run()
+            EnhanceStep(None),  # будет заменён в run()
             SaveStep(),
             CleanupStep(),
         ]
@@ -310,14 +312,15 @@ class AudioPipeline:
                     break
 
                 filepath = af.path
-                emit(LogEvent(f"  [{i}/{total}] {filepath.name}"))
-                emit(TranscribingEvent(f"Транскрибация: {filepath.name}..."))
+                display = af.display_name or filepath.name
+                emit(LogEvent(f"  [{i}/{total}] {display}"))
+                emit(TranscribingEvent(f"Транскрибация: {display}..."))
 
-                if skip_requested is not None and skip_requested(filepath.name):
-                    emit(LogEvent(f"  {filepath.name} — пропущен"))
-                    emit(SkippedEvent(filepath.name, "Пропущен по запросу"))
-                    emit(FileStatusEvent(filename=filepath.name, status="skipped"))
-                    emit(ProgressEvent(i, total, filepath.name, "-"))
+                if skip_requested is not None and skip_requested(display):
+                    emit(LogEvent(f"  {display} — пропущен"))
+                    emit(SkippedEvent(display, "Пропущен по запросу"))
+                    emit(FileStatusEvent(filename=display, status="skipped"))
+                    emit(ProgressEvent(i, total, display, "-"))
                     continue
 
                 # per-file cancel: глобальный cancel или skip текущего файла
@@ -326,7 +329,7 @@ class AudioPipeline:
                 def watcher(
                     global_cancel: Event = cancel,
                     fc: Event = file_cancel,
-                    name: str = filepath.name,
+                    name: str = display,
                 ) -> None:
                     while True:
                         if global_cancel.is_set():
@@ -348,7 +351,7 @@ class AudioPipeline:
                     if isinstance(step, EnhanceStep) and file_cancel.is_set():
                         continue
                     result = step.process(result, config, emit, file_cancel)
-                    if skip_requested is not None and skip_requested(filepath.name):
+                    if skip_requested is not None and skip_requested(display):
                         af.skipped = True
                         result.audio.skipped = True
 
@@ -356,8 +359,8 @@ class AudioPipeline:
                     emit(CancelledEvent("Остановлено пользователем"))
                     break
                 if af.skipped:
-                    emit(LogEvent(f"  {filepath.name} — пропущен (частичный результат)"))
-                    emit(SkippedEvent(filepath.name, "Пропущен, сохранён черновик"))
+                    emit(LogEvent(f"  {display} — пропущен (частичный результат)"))
+                    emit(SkippedEvent(display, "Пропущен, сохранён черновик"))
 
                 file_end = time.time()
                 elapsed = file_end - start_time
@@ -366,7 +369,7 @@ class AudioPipeline:
                 eta_min = int(remaining // 60)
                 eta_sec = int(remaining % 60)
                 eta_str = f"{eta_min}м {eta_sec}с" if eta_min > 0 else f"{eta_sec}с"
-                emit(ProgressEvent(i, total, filepath.name, eta_str))
+                emit(ProgressEvent(i, total, display, eta_str))
 
             if cancel.is_set():
                 emit(CancelledEvent("Остановлено пользователем"))

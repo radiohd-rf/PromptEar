@@ -1,6 +1,7 @@
 """AudioDetector — класс для детекции тихого аудио и предобработки."""
 
 import subprocess
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -37,7 +38,11 @@ class AudioDetector:
                 "-",
             ]
             result = subprocess.run(
-                cmd, capture_output=True, text=True, encoding="utf-8", timeout=FFMPEG_TIMEOUT,
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=FFMPEG_TIMEOUT,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
             for line in result.stderr.splitlines():
@@ -91,16 +96,35 @@ class AudioDetector:
             str(tmp_path),
         ]
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
+        # ffmpeg пишет лог в stderr — без чтения буфер переполняется и ffmpeg
+        # блокируется навсегда (deadlock). Дренируем stderr в фоновом потоке.
+        stderr_lines: list[str] = []
+
+        def _drain() -> None:
+            assert proc.stderr is not None
+            assert proc.stdout is not None
+            for chunk in proc.stderr:
+                stderr_lines.append(chunk.decode("utf-8", errors="replace"))
+
+        threading.Thread(target=_drain, daemon=True).start()
         while proc.poll() is None:
             if cancel is not None and cancel.is_set():
                 proc.kill()
                 proc.wait()
                 raise RuntimeError("Отменено пользователем")
             time.sleep(0.25)
-        stdout, stderr = proc.communicate()
+        assert proc.stdout is not None
+        assert proc.stderr is not None
+        proc.stdout.close()
+        proc.stderr.close()
         if proc.returncode != 0:
-            raise subprocess.CalledProcessError(proc.returncode, cmd, stdout, stderr)
+            err = "".join(stderr_lines)
+            raise subprocess.CalledProcessError(
+                proc.returncode, cmd, b"", err.encode("utf-8", errors="replace")
+            )
         return tmp_path

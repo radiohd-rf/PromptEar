@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -12,11 +12,15 @@
   <header>
     <h1>PromptEar</h1>
     <span id="subtitle">транскрибация аудио</span>
-    <span id="help-btn" onclick="openHelp()">?</span>
-    <div id="theme-toggle" onclick="toggleTheme()">☀️</div>
     <div id="run-area">
+      <button class="icon-btn" id="open-output-btn" onclick="openOutputFolder()" title="Открыть папку с результатами" aria-label="Открыть папку с результатами">
+        <svg viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z"/></svg>
+      </button>
       <div id="thinking-spinner" class="spinner" style="display:none"></div>
-      <button id="run-btn" onclick="runPipeline()">▶ Запуск</button>
+      <button id="run-btn" onclick="runPipeline()">
+        <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        Запуск
+      </button>
       <button id="cancel-btn" style="display:none" onclick="cancelPipeline()">Отмена</button>
     </div>
   </header>
@@ -26,64 +30,58 @@
       <!-- ── ЛЕВАЯ ОБЛАСТЬ: ввод ───────────────────────────────── -->
       <div id="left-area">
         <div id="drop-zone" ondragover="event.preventDefault()" ondrop="onDrop(event)">
+          <svg id="drop-icon" viewBox="0 0 24 24"><path d="M16.5 6v11.5a4.5 4.5 0 0 1-9 0V5a3 3 0 0 1 6 0v11.5a1.5 1.5 0 0 1-3 0V6h-2v10.5a3.5 3.5 0 0 0 7 0V5a5 5 0 0 0-10 0v12.5a6.5 6.5 0 0 0 13 0V6z"/></svg>
           <p id="drop-text">Перетащите аудиофайлы сюда</p>
           <p id="drop-hint">или нажмите «Выбрать файлы»</p>
           <button onclick="document.getElementById('file-input').click()">Выбрать файлы</button>
           <input id="file-input" type="file" multiple accept=".mp3,.wav,.m4a,.ogg,.flac,.aac,.wma,.mp4,.avi,.mkv,.mov,.webm,.wmv,.m4v,.flv,.ts" style="display:none" onchange="onFileSelect(event)">
         </div>
 
-        <p id="file-count">Выбрано: 0 файлов</p>
-
-        <div id="settings">
-          <label>Формат:
-            <select id="output-format">
-              <option value="docx" selected>DOCX</option>
-              <option value="txt">TXT</option>
-              <option value="md">MD</option>
-              <option value="srt">SRT</option>
-              <option value="vtt">VTT</option>
-            </select>
-          </label>
-          <label>Обработка:
-            <select id="enhance-mode">
-              <option value="auto" selected>Авто</option>
-              <option value="ask">Спросить</option>
-              <option value="none">Без</option>
-            </select>
-          </label>
-          <textarea id="context-prompt" placeholder="Контекст (тема, имена, термины)" rows="2"></textarea>
-        </div>
-
-        <div id="history-block">
-          <div class="history-header" onclick="toggleHistory()">
-            <span>Ранее обработанные</span>
-            <span id="history-count" class="history-count"></span>
-            <span id="history-toggle">▸</span>
-          </div>
-          <ul id="history-list" style="display:none"></ul>
-        </div>
-
-<div id="log-container">
-          <h3>Лог</h3>
-          <div id="log"></div>
-        </div>
-      </div>
-
-      <!-- ── ПРАВАЯ ОБЛАСТЬ: результат ─────────────────────────── -->
-      <div id="right-area">
         <div id="file-list-container">
           <h3>Файлы</h3>
           <ul id="file-list"></ul>
         </div>
 
+        <div id="settings">
+          <div class="select-row">
+            <label>Формат:
+              <select id="output-format">
+                <option value="docx" selected>DOCX</option>
+                <option value="txt">TXT</option>
+                <option value="md">MD</option>
+                <option value="srt">SRT</option>
+                <option value="vtt">VTT</option>
+              </select>
+            </label>
+            <label>Обработка:
+              <select id="enhance-mode">
+                <option value="auto" selected>Авто</option>
+                <option value="ask">Спросить</option>
+                <option value="none">Без</option>
+              </select>
+            </label>
+          </div>
+          <textarea id="context-prompt" placeholder="Контекст (тема, имена, термины)" rows="2"></textarea>
+        </div>
+      </div>
+
+      <!-- ── ПРАВАЯ ОБЛАСТЬ: результат ─────────────────────────── -->
+      <div id="right-area">
         <div id="live-container">
           <div class="live-header">
             <h3>Лайв-трансляция</h3>
             <span id="result-badge">Черновик</span>
-            <button id="enhance-btn" style="display:none" onclick="enhanceDraft()">✨ Улучшить с ИИ</button>
+            <button id="enhance-btn" style="display:none" onclick="enhanceDraft()">
+              <svg viewBox="0 0 24 24"><path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7zM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/></svg>
+              Улучшить с ИИ
+            </button>
             <div class="live-actions">
-              <button id="copy-btn" onclick="copyResult()" title="Копировать текст">📋</button>
-              <button id="skip-btn" style="display:none" onclick="skipFile()" title="Пропустить текущий файл">⏭</button>
+              <button id="copy-btn" onclick="copyResult()" title="Копировать текст" aria-label="Копировать текст">
+                <svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11z"/></svg>
+              </button>
+              <button id="skip-btn" style="display:none" onclick="skipFile()" title="Пропустить текущий файл" aria-label="Пропустить текущий файл">
+                <svg viewBox="0 0 24 24"><path d="m6 6 8.5 6L6 18zM16 6h2v12h-2z"/></svg>
+              </button>
             </div>
           </div>
           <div id="enhance-progress" style="display:none">
@@ -101,26 +99,28 @@
     <div class="modal-box" onclick="event.stopPropagation()">
       <div class="modal-header">
         <h2>PromptEar — инструкция</h2>
-        <span class="modal-close" onclick="closeHelp()">✕</span>
+        <button class="icon-btn modal-close" onclick="closeHelp()" aria-label="Закрыть">
+          <svg viewBox="0 0 24 24"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>
+        </button>
       </div>
       <div class="modal-body">
-        <h3>📥 Как добавить файлы</h3>
+        <h3><svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg> Как добавить файлы</h3>
         <p>Перетащите файлы в левую область или нажмите «Выбрать файлы». Можно загружать аудио (MP3, WAV, M4A и др.) и видео (MP4, AVI, MKV и др.).</p>
-        <h3>📝 Контекст (необязательно)</h3>
+        <h3><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM6 20V4h7v5h5v11z"/></svg> Контекст (необязательно)</h3>
         <p>Напишите тему разговора, имена людей или сложные термины — программа распознает их точнее.</p>
-        <h3>⚙️ Настройки</h3>
+        <h3><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.63-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61zM12 15.6A3.61 3.61 0 0 1 8.4 12c0-1.98 1.62-3.6 3.6-3.6s3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg> Настройки</h3>
         <p><b>Формат</b> — DOCX/TXT/MD/SRT/VTT. <b>Обработка</b> — «Авто» (ИИ сразу), «Спросить» (кнопка улучшения), «Без» (только черновик).</p>
-        <h3>▶️ Что происходит после нажатия «Запуск»</h3>
+        <h3><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg> Что происходит после нажатия «Запуск»</h3>
         <p>Программа по очереди: 1) подготовит звук, 2) распознает речь через Whisper, 3) улучшит текст через LLM (видно в прямом эфире), 4) сохранит результат.</p>
-        <h3>📋 Копирование</h3>
-        <p>Кнопка «📋» копирует текст из окна в любой момент — даже во время транскрибации.</p>
-        <h3>⏭ Пропустить</h3>
-        <p>Кнопка «⏭» останавливает обработку текущего файла и переходит к следующему (или завершает). Частичный черновик сохраняется.</p>
-        <h3>⛔ Как отменить</h3>
+        <h3><svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11z"/></svg> Копирование</h3>
+        <p>Кнопка копирования в правом верхнем углу окна результата копирует текст в любой момент — даже во время транскрибации.</p>
+        <h3><svg viewBox="0 0 24 24"><path d="m6 6 8.5 6L6 18zM16 6h2v12h-2z"/></svg> Пропустить</h3>
+        <p>Кнопка пропуска останавливает обработку текущего файла и переходит к следующему (или завершает). Частичный черновик сохраняется.</p>
+        <h3><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm5 13H7V9h10z"/></svg> Как отменить</h3>
         <p>Нажмите «Отмена» — программа сразу остановится. Отмена останавливает всю задачу.</p>
-        <h3>📂 Где найти результат</h3>
-        <p>В папке <code>output/</code> рядом с программой. Кнопка «📁 Открыть папку» откроет её.</p>
-        <h3>ℹ️ Статус-бар</h3>
+        <h3><svg viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z"/></svg> Где найти результат</h3>
+        <p>В папке <code>output/</code> рядом с программой. Кнопка «Открыть папку» откроет её.</p>
+        <h3><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-6h2zm0-8h-2V7h2z"/></svg> Статус-бар</h3>
         <p>Снизу показано, работает ли программа на видеокарте (GPU) и запущен ли LLM-движок с моделью.</p>
       </div>
     </div>
@@ -129,8 +129,33 @@
   <footer>
     <span id="gpu-status"></span>
     <span id="llm-status"></span>
-    <span id="open-output-btn" onclick="openOutputFolder()">📁 Открыть папку</span>
+    <div id="footer-actions">
+      <button class="icon-btn line-icon" id="help-btn" onclick="openHelp()" title="Инструкция" aria-label="Инструкция">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+      </button>
+      <button class="icon-btn line-icon" id="theme-toggle" onclick="toggleTheme()" title="Тема" aria-label="Переключить тему">
+        <svg id="theme-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        <svg id="theme-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      </button>
+      <button id="logs-btn" onclick="toggleLogs()" title="Логи" aria-label="Логи">
+        <svg viewBox="0 0 24 24"><path d="M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v14h14V6zm2 2h10v1.5H7zm0 3h10v1.5H7zm0 3h7v1.5H7z"/></svg>
+        Логи
+      </button>
+    </div>
   </footer>
+</div>
+
+<!-- Logs modal -->
+<div id="logs-overlay" class="modal-overlay" onclick="closeLogs()" style="display:none">
+  <div class="modal-box logs-box" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2>Логи</h2>
+      <button class="icon-btn modal-close" onclick="closeLogs()" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>
+      </button>
+    </div>
+    <div id="log"></div>
+  </div>
 </div>
 
 <script src="script.js"></script>

@@ -4,6 +4,10 @@ title PromptEar
 set "APP_DIR=%~dp0"
 set "VENV_DIR=%APP_DIR%venv"
 
+rem Порт llama-server: 8080 занят системным Apache (httpd), используем 8081.
+rem Сам сервер поднимается один раз вручную/при установке и живёт отдельно.
+set "PROMPTEAR_LLM_PORT=8081"
+
 if not exist "%VENV_DIR%\Scripts\python.exe" (
     echo [PromptEar] Virtual environment not found.
     echo [PromptEar] Running setup first...
