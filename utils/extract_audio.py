@@ -1,10 +1,10 @@
 """Извлечение аудиодорожки из видео через ffmpeg."""
 
 import subprocess
-import tempfile
+import uuid
 from pathlib import Path
 
-from config import PREPROCESS_SAMPLE_RATE
+from config import PREPROCESS_SAMPLE_RATE, TEMP_DIR
 
 
 def get_ffmpeg_path() -> str:
@@ -15,15 +15,24 @@ def get_ffmpeg_path() -> str:
     return "ffmpeg"
 
 
-def extract_audio(video_path: Path, ffmpeg_path: str | None = None) -> Path:
-    """Извлекает аудио из видео во временный WAV (16kHz, mono, PCM)."""
+def extract_audio(
+    video_path: Path,
+    ffmpeg_path: str | None = None,
+    temp_dir: Path | None = None,
+) -> Path:
+    """Извлекает аудио из видео во временный WAV (16kHz, mono, PCM).
+
+    Файл создаётся в `temp_dir` (или `<корень>/temp` по умолчанию).
+    """
     if ffmpeg_path is None:
         ffmpeg_path = get_ffmpeg_path()
+    if temp_dir is None:
+        temp_dir = TEMP_DIR
+
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    wav_path = temp_dir / f"{uuid.uuid4().hex}.wav"
 
     video_path = video_path.resolve()
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        wav_path = Path(tmp.name)
-
     cmd = [
         ffmpeg_path,
         "-i", str(video_path),

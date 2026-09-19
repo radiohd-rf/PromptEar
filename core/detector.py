@@ -1,8 +1,8 @@
 """AudioDetector — класс для детекции тихого аудио и предобработки."""
 
 import subprocess
-import tempfile
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from threading import Event
@@ -13,6 +13,7 @@ from config import (
     PREPROCESS_LOWPASS_FREQ,
     PREPROCESS_SAMPLE_RATE,
     QUIET_THRESHOLD_DB,
+    TEMP_DIR,
 )
 from core.events import LogEvent, PipelineEvent
 
@@ -52,11 +53,21 @@ class AudioDetector:
         return False
 
     @staticmethod
-    def preprocess(src_path: Path, quiet: bool = False, cancel: Event | None = None) -> Path:
-        """Highpass/lowpass/normalize + 16kHz mono WAV. Для quiet — компрессия."""
+    def preprocess(
+        src_path: Path,
+        quiet: bool = False,
+        cancel: Event | None = None,
+        temp_dir: Path | None = None,
+    ) -> Path:
+        """Highpass/lowpass/normalize + 16kHz mono WAV. Для quiet — компрессия.
+
+        Результат пишется в `temp_dir` (или `<корень>/temp` по умолчанию).
+        """
         src_path = src_path.resolve()
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
+        if temp_dir is None:
+            temp_dir = TEMP_DIR
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        tmp_path = temp_dir / f"{uuid.uuid4().hex}.wav"
 
         filters = [
             f"highpass=f={PREPROCESS_HIGHPASS_FREQ}",

@@ -42,6 +42,7 @@ class PipelineConfig:
     initial_prompt: str | None = None
     llm_available: bool = False
     enhance_mode: str = ENHANCE_AUTO
+    temp_dir: Path | None = None
 
 
 @dataclass

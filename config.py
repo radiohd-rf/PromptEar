@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Final
 
 # ── Пути данных ─────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
@@ -9,6 +10,7 @@ DATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / "PromptEar"
 LOG_DIR = DATA_DIR / "logs"
 FIRST_RUN_FLAG = DATA_DIR / ".initialized"
 SETTINGS_FILE = DATA_DIR / "settings.json"
+TEMP_DIR: Final[Path] = BASE_DIR / "temp"
 
 # Кэши моделей внутри портативной папки (не BrokenCache WebView2 — диск)
 MODELS_DIR = BASE_DIR / "models"

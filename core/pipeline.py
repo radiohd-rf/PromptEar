@@ -79,13 +79,20 @@ class DetectPreprocessStep(PipelineStep):
 
         emit(LogEvent("  Предобработка (фильтрация + нормализация)..."))
         try:
-            preproc_path = AudioDetector.preprocess(filepath, quiet=whisper_mode, cancel=cancel)
+            preproc_path = AudioDetector.preprocess(
+                filepath, quiet=whisper_mode, cancel=cancel, temp_dir=config.temp_dir
+            )
             result.audio.preprocessed = True
         except Exception as exc:
             emit(LogEvent(f"  Ошибка предобработки: {exc}, работаю с оригиналом"))
             preproc_path = None
         result.audio.preprocessed_path = preproc_path or filepath
-        result.audio.temp_path = preproc_path
+        if preproc_path:
+            # не теряем старый temp_path (извлечённый из видео WAV) — чистим сразу
+            old_tmp = result.audio.temp_path
+            if old_tmp and old_tmp != preproc_path and old_tmp.exists():
+                old_tmp.unlink(missing_ok=True)
+            result.audio.temp_path = preproc_path
         return result
 
 

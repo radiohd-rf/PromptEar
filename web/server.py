@@ -4,13 +4,14 @@ import contextlib
 import json
 import os
 import queue
+import shutil
 import threading
 import uuid
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
-from config import LLM_ENGINE
+from config import LLM_ENGINE, TEMP_DIR
 from core.events import (
     CancelledEvent,
     DoneEvent,
@@ -138,6 +139,7 @@ def _process_files(task_id: str) -> None:
             initial_prompt=task.get("initial_prompt", "") or None,
             llm_available=False,
             enhance_mode=task.get("enhance_mode", "auto"),
+            temp_dir=TEMP_DIR / task_id,
         )
         task["enhance_mode"] = config.enhance_mode
 
@@ -157,6 +159,7 @@ def _process_files(task_id: str) -> None:
             audio_files.append(AudioFile(
                 path=Path(f),
                 original_path=Path(orig) if orig else None,
+                temp_path=Path(f) if Path(f) in task["temp_wavs"] else None,
             ))
         emit(
             LogEvent(
@@ -187,6 +190,7 @@ def _process_files(task_id: str) -> None:
         logger.error(f"Pipeline error: {exc}", exc_info=True)
         emit(ErrorEvent(str(exc)))
     finally:
+        shutil.rmtree(TEMP_DIR / task_id, ignore_errors=True)
         emit_queue.put_nowait({"type": "__done__"})
 
 
@@ -202,6 +206,8 @@ def upload_files():
         return jsonify({"error": "no files"}), 400
 
     task_id = uuid.uuid4().hex[:12]
+    task_temp_dir = TEMP_DIR / task_id
+    task_temp_dir.mkdir(parents=True, exist_ok=True)
     saved = []
     for f in request.files.getlist("files"):
         if f.filename:
@@ -217,13 +223,15 @@ def upload_files():
 
     # извлекаем аудио из видео; запоминаем оригиналы для удаления после обработки
     original_videos: dict[str, str] = {}  # wav_path -> original_video_path
+    temp_wavs: set[Path] = set()  # извлечённые WAV, их удалит CleanupStep/финал
     for p in list(all_supported):
         if is_video_file(p):
             try:
-                wav_path = extract_audio(p)
+                wav_path = extract_audio(p, temp_dir=task_temp_dir)
                 all_supported.remove(p)
                 all_supported.append(wav_path)
                 original_videos[str(wav_path)] = str(p)
+                temp_wavs.add(wav_path)
             except (ValueError, RuntimeError) as exc:
                 app.logger.warning(f"Video extraction failed for {p.name}: {exc}")
                 return jsonify({"error": str(exc)}), 400
@@ -241,6 +249,7 @@ def upload_files():
         "output_dir": UPLOAD_DIR,
         "original_videos": original_videos,
         "uploaded_files": saved,
+        "temp_wavs": {str(p) for p in temp_wavs},
         "status": "processing",
         "results": {},
     }
