@@ -204,7 +204,7 @@ def build_variant(name: str, index_url: str) -> None:
             csc = str(p)
             break
     if csc:
-        ico = str(ROOT / "di.ico")
+        ico = str(ROOT / "assets" / "icon.ico")
         if not Path(ico).exists():
             ico = str(ROOT / "assets" / "icon_titlebar.ico")
         refs = [

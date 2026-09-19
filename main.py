@@ -40,6 +40,9 @@ def main() -> None:
 
     import webview
 
+    icon_path = Path(__file__).resolve().parent / "assets" / "icon.ico"
+    icon = str(icon_path) if icon_path.is_file() else None
+
     webview.create_window(
         "PromptEar",
         url,
@@ -48,7 +51,7 @@ def main() -> None:
         resizable=True,
     )
 
-    webview.start()
+    webview.start(icon=icon)
     os._exit(0)
 
 
