@@ -43,8 +43,8 @@ def main() -> None:
     webview.create_window(
         "PromptEar",
         url,
-        width=860,
-        height=720,
+        width=1150,
+        height=760,
         resizable=True,
     )
 

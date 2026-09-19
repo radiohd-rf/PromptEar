@@ -9,6 +9,7 @@ from threading import Event
 from typing import Any
 
 from config import WHISPER_MODEL
+from core.models import Segment
 
 
 def ensure_faster_whisper():
@@ -57,13 +58,30 @@ class Transcriber:
 
     def transcribe(self, audio_path: Path, cancel: Event | None = None, **kwargs) -> str:
         """Транскрибирует аудиофайл через faster-whisper. Ждёт загрузку модели если нужно."""
+        text, _segments, _duration = self.transcribe_with_segments(
+            audio_path, cancel=cancel, **kwargs
+        )
+        return text
+
+    def transcribe_with_segments(
+        self,
+        audio_path: Path,
+        cancel: Event | None = None,
+        on_segment=None,
+        **kwargs,
+    ) -> tuple[str, list[Segment], float]:
+        """Транскрибирует аудио и возвращает (текст, сегменты с таймкодами, длительность).
+
+        on_segment вызывается с накопленным сырым текстом по мере распознавания
+        (для живого черновика в UI).
+        """
         self.load_model()
 
         language = kwargs.pop("language", "ru")
         beam_size = kwargs.pop("beam_size", 5)
         vad_filter = kwargs.pop("vad_filter", True)
 
-        segments, _info = self._model.transcribe(
+        segments, info = self._model.transcribe(
             str(audio_path),
             language=language,
             beam_size=beam_size,
@@ -71,11 +89,17 @@ class Transcriber:
             **kwargs,
         )
         parts: list[str] = []
+        raw_segments: list[Segment] = []
+        accumulated: list[str] = []
         for seg in segments:
             if cancel is not None and cancel.is_set():
                 break
             parts.append(seg.text)
-        return " ".join(parts)
+            raw_segments.append(Segment(start=seg.start, end=seg.end, text=seg.text))
+            accumulated.append(seg.text)
+            if on_segment is not None:
+                on_segment(" ".join(accumulated))
+        return " ".join(parts), raw_segments, float(getattr(info, "duration", 0.0) or 0.0)
 
     def unload(self):
         """Выгружает модель из памяти."""

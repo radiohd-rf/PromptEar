@@ -41,6 +41,56 @@ class TranscribingEvent(PipelineEvent):
 
 
 @dataclass
+class DraftEvent(PipelineEvent):
+    """Живой черновик транскрибации (сырой текст по мере распознавания)."""
+
+    text: str
+    final: bool = False
+
+
+@dataclass
+class EnhancingEvent(PipelineEvent):
+    """Прогресс многопроходного улучшения."""
+
+    active_pass: int
+    total_passes: int
+
+
+@dataclass
+class EnhancingStreamEvent(PipelineEvent):
+    """Накопленный текст прохода по мере генерации («модель печатает»)."""
+
+    filename: str
+    text: str
+    active_pass: int = 0
+    final: bool = False
+
+
+@dataclass
+class FileStatusEvent(PipelineEvent):
+    """Изменение статуса файла в очереди."""
+
+    filename: str
+    status: str  # queued|processing|transcribing|enhancing|done|skipped
+
+
+@dataclass
+class SkippedEvent(PipelineEvent):
+    """Файл пропущен пользователем (обработан наполовину)."""
+
+    filename: str
+    message: str = ""
+
+
+@dataclass
+class ResultEvent(PipelineEvent):
+    """Финальный (улучшенный) текст файла."""
+
+    text: str
+    filename: str
+
+
+@dataclass
 class LlmReadyEvent(PipelineEvent):
     llm_ok: bool
     model_ok: bool

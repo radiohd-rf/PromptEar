@@ -4,6 +4,7 @@
 SAGE — однопроходный корректор орфографии/пунктуации/заглавных.
 """
 
+import json
 import os
 import re
 import subprocess
@@ -38,7 +39,7 @@ from processing.topic import detect_topic
 PASS_LABELS = {
     "pass1": "Очистка (орфография, пунктуация, повторы)",
     "pass2": "Стиль (грамматика, согласование)",
-    "pass3": "Структура (абзацы, диалоги)",
+    "pass3": "Структура (абзацы, диалоги, без воды)",
 }
 
 
@@ -56,8 +57,9 @@ class BaseEnhancer(ABC):
         topic: str = "",
         progress_callback=None,
         cancel: Event | None = None,
+        stream_callback=None,
     ) -> str:
-        """Улучшает текст (полный режим)."""
+        """Улучшает текст (полный режим). stream_callback(text, pass_no, chunk_no, chunk_total)."""
 
     @abstractmethod
     def install(self, progress_callback=None) -> bool:
@@ -148,10 +150,13 @@ class LlamaCppEnhancer(BaseEnhancer):
         topic: str = "",
         progress_callback=None,
         cancel: Event | None = None,
+        stream_callback=None,
     ) -> str:
         """3-проходное улучшение: очистка → стиль → структура.
 
         Длинные тексты дробятся на чанки, каждый обрабатывается независимо.
+        stream_callback(text_so_far, pass_no, chunk_no, chunk_total) вызывается
+        по мере генерации каждого прохода («модель печатает»).
         """
         if not text.strip():
             return text
@@ -180,18 +185,38 @@ class LlamaCppEnhancer(BaseEnhancer):
                     label = f"Чанк {idx + 1}/{len(chunks)}: {label}"
                 if progress_callback:
                     progress_callback(label)
-                try:
-                    result = pass_fn(chunk, topic)
-                    if self._result_too_short(result, chunk):
+
+                if stream_callback is not None:
+                    try:
+                        result = pass_fn(
+                            chunk,
+                            topic,
+                            cancel=cancel,
+                            stream_callback=stream_callback,
+                        )
+                    except Exception:
                         if progress_callback:
                             progress_callback(
-                                "  Результат слишком короткий (<60% длины), сохранён предыдущий"
+                                f"  Ошибка на проходе {name[4:]}, сохранён предыдущий"
                             )
-                    else:
-                        chunk = result
-                except Exception:
+                        result = chunk
+                else:
+                    try:
+                        result = pass_fn(chunk, topic)
+                    except Exception:
+                        if progress_callback:
+                            progress_callback(
+                                f"  Ошибка на проходе {name[4:]}, сохранён предыдущий"
+                            )
+                        result = chunk
+
+                if self._result_too_short(result, chunk):
                     if progress_callback:
-                        progress_callback(f"  Ошибка на проходе {name[4:]}, сохранён предыдущий")
+                        progress_callback(
+                            "  Результат слишком короткий (<60% длины), сохранён предыдущий"
+                        )
+                else:
+                    chunk = result
 
             if cancel is not None and cancel.is_set():
                 break
@@ -230,7 +255,79 @@ class LlamaCppEnhancer(BaseEnhancer):
                     time.sleep(2)
         raise RuntimeError(f"llama-server недоступен: {last_exc}")
 
-    def _pass_cleanup(self, text: str, topic: str) -> str:
+    def _call_llm_stream(
+        self,
+        prompt: str,
+        on_token,
+        cancel: Event | None = None,
+        timeout: int = LLM_TIMEOUT,
+    ) -> str:
+        """Отправляет запрос со стримингом токенов (SSE).
+
+        on_token(text_so_far) вызывается с накопленным текстом по мере генерации.
+        Флаг cancel прерывает запрос: соединение закрывается, генерация обрывается.
+        Возвращает полный сгенерированный текст.
+        """
+        payload = {
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": LLM_TEMPERATURE,
+            "max_tokens": LLM_NUM_PREDICT,
+            "stream": True,
+        }
+        url = f"{self.base_url}/v1/chat/completions"
+        last_exc: Exception | None = None
+        for attempt in range(LLM_RETRIES + 1):
+            try:
+                with self._get_session().post(
+                    url,
+                    json=payload,
+                    timeout=timeout,
+                    stream=True,
+                ) as r:
+                    r.raise_for_status()
+                    parts: list[str] = []
+                    last_emit = 0
+                    for raw in r.iter_lines(decode_unicode=False):
+                        if cancel is not None and cancel.is_set():
+                            return "".join(parts).strip()
+                        if not raw:
+                            continue
+                        # header без charset (text/event-stream) заставляет requests
+                        # угадывать кодировку и ломать кириллицу — декодируем вручную
+                        line = raw.decode("utf-8")
+                        data = line[6:] if line.startswith("data: ") else line
+                        if data.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except ValueError:
+                            continue
+                        delta = (chunk.get("choices") or [{}])[0].get("delta", {})
+                        piece = delta.get("content")
+                        if piece:
+                            parts.append(piece)
+                            emitted = "".join(parts)
+                            if len(emitted) - last_emit >= 40:
+                                last_emit = len(emitted)
+                                on_token(emitted)
+                    if parts:
+                        on_token("".join(parts))
+                    return "".join(parts).strip()
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                last_exc = exc
+                if cancel is not None and cancel.is_set():
+                    return ""
+                if attempt < LLM_RETRIES:
+                    time.sleep(2)
+        raise RuntimeError(f"llama-server недоступен: {last_exc}")
+
+    def _pass_cleanup(
+        self,
+        text: str,
+        topic: str,
+        cancel: Event | None = None,
+        stream_callback=None,
+    ) -> str:
         """Проход 1: орфография, пунктуация, повторы."""
         prompt = (
             "Ты — редактор. Вход — сырая транскрипция с ошибками распознавания.\n\n"
@@ -250,9 +347,17 @@ class LlamaCppEnhancer(BaseEnhancer):
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nТекст:\n{text}"
+        if stream_callback is not None:
+            return self._call_llm_stream(prompt, stream_callback, cancel=cancel)
         return self._call_llm(prompt)
 
-    def _pass_style(self, text: str, topic: str) -> str:
+    def _pass_style(
+        self,
+        text: str,
+        topic: str,
+        cancel: Event | None = None,
+        stream_callback=None,
+    ) -> str:
         """Проход 2: грамматика, стиль, согласование."""
         prompt = (
             "Ты — редактор. Вход — текст после автоматической очистки, "
@@ -273,16 +378,27 @@ class LlamaCppEnhancer(BaseEnhancer):
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nТекст:\n{text}"
+        if stream_callback is not None:
+            return self._call_llm_stream(prompt, stream_callback, cancel=cancel)
         return self._call_llm(prompt)
 
-    def _pass_structure(self, text: str, topic: str) -> str:
-        """Проход 3: разбивка на абзацы, оформление диалогов."""
+    def _pass_structure(
+        self,
+        text: str,
+        topic: str,
+        cancel: Event | None = None,
+        stream_callback=None,
+    ) -> str:
+        """Проход 3: разбивка на абзацы, оформление диалогов, чистка слов-паразитов."""
         prompt = (
             "Ты — редактор. Вход — текст с корректной орфографией и грамматикой.\n\n"
             "Что можно делать:\n"
             "- Разбить на абзацы по смене темы или говорящего (добавить пустые строки)\n"
             "- Если есть диалоги/прямая речь — каждый реплика с новой строки\n"
-            "- Объединить короткие однострочные абзацы в связные блоки\n\n"
+            "- Объединить короткие однострочные абзацы в связные блоки\n"
+            "- Удалить слова-паразиты и повторы-заполнители "
+            "(такие как: это самое, ну, типа, как бы, вот, значит, в общем, короче), "
+            "если они не несут смысла — текст без воды\n\n"
             "ЗАПРЕЩЕНО:\n"
             "- Менять слова, порядок слов, стиль, грамматику\n"
             "- Удалять или пересказывать факты, имена, числа, даты\n"
@@ -294,6 +410,8 @@ class LlamaCppEnhancer(BaseEnhancer):
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nТекст:\n{text}"
+        if stream_callback is not None:
+            return self._call_llm_stream(prompt, stream_callback, cancel=cancel)
         return self._call_llm(prompt)
 
     @staticmethod
@@ -462,6 +580,7 @@ class SageEnhancer(BaseEnhancer):
         topic: str = "",
         progress_callback=None,
         cancel: Event | None = None,
+        stream_callback=None,
     ) -> str:
         """Однопроходная коррекция. Чанки ≤ SAGE_MAX_CHARS (вход T5 ≤512 токенов)."""
         if not text.strip():
@@ -478,12 +597,16 @@ class SageEnhancer(BaseEnhancer):
             if progress_callback:
                 label = f"SAGE: чанк {idx + 1}/{len(chunks)}"
                 progress_callback(label)
+            if stream_callback is not None:
+                stream_callback(chunk, 1, idx + 1, len(chunks))
             try:
                 corrected = self._correct_chunk(chunk)
                 if not corrected or len(corrected) < len(chunk) * MULTI_PASS_MIN_RATIO:
                     corrected = chunk
             except Exception:
                 corrected = chunk
+            if stream_callback is not None:
+                stream_callback(corrected, 1, idx + 1, len(chunks))
             processed.append(corrected)
 
         return "\n\n".join(processed)

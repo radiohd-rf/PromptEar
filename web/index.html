@@ -14,49 +14,76 @@
     <span id="subtitle">транскрибация аудио</span>
     <span id="help-btn" onclick="openHelp()">?</span>
     <div id="theme-toggle" onclick="toggleTheme()">☀️</div>
+    <div id="run-area">
+      <div id="thinking-spinner" class="spinner" style="display:none"></div>
+      <button id="run-btn" onclick="runPipeline()">▶ Запуск</button>
+      <button id="cancel-btn" style="display:none" onclick="cancelPipeline()">Отмена</button>
+    </div>
   </header>
 
   <main>
-    <!-- Drop zone -->
-    <div id="drop-zone" ondragover="event.preventDefault()" ondrop="onDrop(event)">
-      <p id="drop-text">Перетащите аудиофайлы сюда</p>
-      <p id="drop-hint">или нажмите «Выбрать файлы»</p>
-      <button onclick="document.getElementById('file-input').click()">Выбрать файлы</button>
-      <input id="file-input" type="file" multiple accept=".mp3,.wav,.m4a,.ogg,.flac,.aac,.wma,.mp4,.avi,.mkv,.mov,.webm,.wmv,.m4v,.flv,.ts" style="display:none" onchange="onFileSelect(event)">
-    </div>
+    <div id="main-row">
+      <!-- ── ЛЕВАЯ ОБЛАСТЬ: ввод ───────────────────────────────── -->
+      <div id="left-area">
+        <div id="drop-zone" ondragover="event.preventDefault()" ondrop="onDrop(event)">
+          <p id="drop-text">Перетащите аудиофайлы сюда</p>
+          <p id="drop-hint">или нажмите «Выбрать файлы»</p>
+          <button onclick="document.getElementById('file-input').click()">Выбрать файлы</button>
+          <input id="file-input" type="file" multiple accept=".mp3,.wav,.m4a,.ogg,.flac,.aac,.wma,.mp4,.avi,.mkv,.mov,.webm,.wmv,.m4v,.flv,.ts" style="display:none" onchange="onFileSelect(event)">
+        </div>
 
-    <!-- File list -->
-    <div id="file-list-container" style="display:none">
-      <h3>Файлы</h3>
-      <ul id="file-list"></ul>
-    </div>
+        <p id="file-count">Выбрано: 0 файлов</p>
 
-    <!-- Context -->
-    <div id="context-block">
-      <textarea id="context-prompt" placeholder="Контекст (тема, имена, термины)" rows="2"></textarea>
-    </div>
+        <div id="settings">
+          <label>Формат:
+            <select id="output-format">
+              <option value="docx" selected>DOCX</option>
+              <option value="txt">TXT</option>
+              <option value="md">MD</option>
+              <option value="srt">SRT</option>
+              <option value="vtt">VTT</option>
+            </select>
+          </label>
+          <label>Обработка:
+            <select id="enhance-mode">
+              <option value="auto" selected>Авто</option>
+              <option value="ask">Спросить</option>
+              <option value="none">Без</option>
+            </select>
+          </label>
+          <textarea id="context-prompt" placeholder="Контекст (тема, имена, термины)" rows="2"></textarea>
+        </div>
 
-    <!-- Toolbar -->
-    <div id="toolbar">
-      <button id="run-btn" onclick="runPipeline()">Обработать</button>
-      <button id="cancel-btn" style="display:none" onclick="cancelPipeline()">Отмена</button>
-      <label id="format-label">
-        Формат:
-        <select id="output-format">
-          <option value="docx" selected>DOCX</option>
-          <option value="txt">TXT</option>
-        </select>
-      </label>
-      <div id="toolbar-right">
-        <div id="thinking-spinner" class="spinner" style="display:none"></div>
-        <button id="open-output-btn" onclick="openOutputFolder()">📁 Открыть папку</button>
+        <div id="log-container">
+          <h3>Лог</h3>
+          <div id="log"></div>
+        </div>
       </div>
-    </div>
 
-    <!-- Log panel -->
-    <div id="log-container" style="display:none">
-      <h3>Лог</h3>
-      <div id="log"></div>
+      <!-- ── ПРАВАЯ ОБЛАСТЬ: результат ─────────────────────────── -->
+      <div id="right-area">
+        <div id="file-list-container">
+          <h3>Файлы</h3>
+          <ul id="file-list"></ul>
+        </div>
+
+        <div id="live-container">
+          <div class="live-header">
+            <h3>Лайв-трансляция</h3>
+            <span id="result-badge">Черновик</span>
+            <button id="enhance-btn" style="display:none" onclick="enhanceDraft()">✨ Улучшить с ИИ</button>
+            <div class="live-actions">
+              <button id="copy-btn" onclick="copyResult()" title="Копировать текст">📋</button>
+              <button id="skip-btn" style="display:none" onclick="skipFile()" title="Пропустить текущий файл">⏭</button>
+            </div>
+          </div>
+          <div id="enhance-progress" style="display:none">
+            <div class="progress-track"><div id="enhance-progress-bar"></div></div>
+            <span id="enhance-progress-label"></span>
+          </div>
+          <div id="result-text"></div>
+        </div>
+      </div>
     </div>
   </main>
 
@@ -69,15 +96,19 @@
       </div>
       <div class="modal-body">
         <h3>📥 Как добавить файлы</h3>
-        <p>Перетащите файлы в окно или нажмите «Выбрать файлы». Можно загружать аудио (MP3, WAV, M4A и др.) и видео (MP4, AVI, MKV и др.).</p>
+        <p>Перетащите файлы в левую область или нажмите «Выбрать файлы». Можно загружать аудио (MP3, WAV, M4A и др.) и видео (MP4, AVI, MKV и др.).</p>
         <h3>📝 Контекст (необязательно)</h3>
         <p>Напишите тему разговора, имена людей или сложные термины — программа распознает их точнее.</p>
-        <h3>⚙️ Формат</h3>
-        <p>DOCX — красиво оформленный документ. TXT — обычный текст.</p>
-        <h3>▶️ Что происходит после нажатия «Обработать»</h3>
-        <p>Программа по очереди: 1) подготовит звук, 2) распознает речь через Whisper, 3) улучшит текст через LLM, 4) сохранит результат.</p>
+        <h3>⚙️ Настройки</h3>
+        <p><b>Формат</b> — DOCX/TXT/MD/SRT/VTT. <b>Обработка</b> — «Авто» (ИИ сразу), «Спросить» (кнопка улучшения), «Без» (только черновик).</p>
+        <h3>▶️ Что происходит после нажатия «Запуск»</h3>
+        <p>Программа по очереди: 1) подготовит звук, 2) распознает речь через Whisper, 3) улучшит текст через LLM (видно в прямом эфире), 4) сохранит результат.</p>
+        <h3>📋 Копирование</h3>
+        <p>Кнопка «📋» копирует текст из окна в любой момент — даже во время транскрибации.</p>
+        <h3>⏭ Пропустить</h3>
+        <p>Кнопка «⏭» останавливает обработку текущего файла и переходит к следующему (или завершает). Частичный черновик сохраняется.</p>
         <h3>⛔ Как отменить</h3>
-        <p>Нажмите «Отмена» — программа сразу остановится. Результаты уже готовых файлов сохранятся.</p>
+        <p>Нажмите «Отмена» — программа сразу остановится. Отмена останавливает всю задачу.</p>
         <h3>📂 Где найти результат</h3>
         <p>В папке <code>output/</code> рядом с программой. Кнопка «📁 Открыть папку» откроет её.</p>
         <h3>ℹ️ Статус-бар</h3>
@@ -89,6 +120,7 @@
   <footer>
     <span id="gpu-status"></span>
     <span id="llm-status"></span>
+    <span id="open-output-btn" onclick="openOutputFolder()">📁 Открыть папку</span>
   </footer>
 </div>
 

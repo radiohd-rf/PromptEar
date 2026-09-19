@@ -19,8 +19,13 @@ SAGE_MODEL_DIR = MODELS_DIR / "sage"
 LLAMA_DIR = BASE_DIR / "llama"
 
 # ── Output ──────────────────────────────────────────────────────────────────
-OUTPUT_FORMATS = ("docx", "txt")
+OUTPUT_FORMATS = ("docx", "txt", "srt", "vtt", "md")
 DEFAULT_FORMAT = "docx"
+
+# ── Enhance mode ────────────────────────────────────────────────────────────
+# none — только транскрибация; auto — улучшать сразу; ask — кнопка «Улучшить с ИИ»
+ENHANCE_MODES = ("none", "auto", "ask")
+DEFAULT_ENHANCE_MODE = "auto"
 
 # ── Audio / Video ───────────────────────────────────────────────────────────
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac", ".wma"}
