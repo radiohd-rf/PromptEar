@@ -4,14 +4,16 @@ import contextlib
 import json
 import os
 import queue
+import re
 import shutil
 import threading
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
-from config import LLM_ENGINE, TEMP_DIR
+from config import LLM_ENGINE, OUTPUT_FORMATS, TEMP_DIR
 from core.events import (
     CancelledEvent,
     DoneEvent,
@@ -49,6 +51,18 @@ PORT = int(os.environ.get("PROMPTEAR_PORT", 5000))
 app = Flask(__name__, static_folder=str(WEB_DIR), static_url_path="")
 
 tasks: dict[str, dict] = {}
+
+
+def _find_output_file(filename: str) -> Path | None:
+    """Ищет готовый файл в output/ по имени `{stamp}-{name}`."""
+    candidates = [
+        p
+        for p in UPLOAD_DIR.iterdir()
+        if p.is_file() and (p.name == filename or p.name.endswith(f"-{filename}"))
+    ]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
 
 
 def _event_to_dict(event) -> dict:
@@ -208,10 +222,12 @@ def upload_files():
     task_id = uuid.uuid4().hex[:12]
     task_temp_dir = TEMP_DIR / task_id
     task_temp_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
     saved = []
     for f in request.files.getlist("files"):
         if f.filename:
-            dest = UPLOAD_DIR / f"{task_id}_{f.filename}"
+            safe_name = re.sub(r'[<>:"/\\|?*]+', "_", f.filename)
+            dest = UPLOAD_DIR / f"{stamp}-{safe_name}"
             f.save(str(dest))
             saved.append(str(dest))
 
@@ -291,8 +307,8 @@ def status_stream(task_id):
 @app.route("/api/download/<task_id>/<filename>")
 def download_file(task_id, filename):
     """Скачать готовый файл результата."""
-    filepath = UPLOAD_DIR / f"{task_id}_{filename}"
-    if not filepath.exists():
+    filepath = _find_output_file(filename)
+    if filepath is None:
         return jsonify({"error": "file not found"}), 404
     return send_file(str(filepath), as_attachment=True)
 
@@ -437,5 +453,35 @@ def llm_check():
 @app.route("/api/open-output")
 def open_output():
     import subprocess
+
+    select = request.args.get("select")
+    if select:
+        target = UPLOAD_DIR / select
+        # защита от path traversal
+        try:
+            target.resolve().relative_to(UPLOAD_DIR.resolve())
+        except ValueError:
+            return jsonify({"error": "invalid path"}), 400
+        if target.exists():
+            subprocess.Popen(["explorer", "/select,", str(target)])
+            return jsonify({"ok": True})
     subprocess.Popen(["explorer", str(UPLOAD_DIR)])
     return jsonify({"ok": True})
+
+
+@app.route("/api/history")
+def history():
+    """Готовые файлы-результаты из output/ — видимость прошлых обработок (#14)."""
+    entries = []
+    for p in sorted(UPLOAD_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if not p.is_file():
+            continue
+        if p.suffix.lower().lstrip(".") not in OUTPUT_FORMATS:
+            continue
+        st = p.stat()
+        entries.append({
+            "name": p.name,
+            "size": st.st_size,
+            "modified": st.st_mtime,
+        })
+    return jsonify({"files": entries})
