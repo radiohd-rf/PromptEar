@@ -184,6 +184,61 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
 }
 #context-prompt::placeholder { color: var(--ph); }
 
+#history-block {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--log-bg);
+  max-height: 25%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.history-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--ph);
+  cursor: pointer;
+  user-select: none;
+}
+.history-header:hover { color: var(--fg); }
+.history-count { font-size: 11px; }
+#history-toggle { margin-left: auto; }
+#history-list {
+  list-style: none;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+#history-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+#history-list li:hover { background: var(--header-bg); }
+.history-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.history-size {
+  font-size: 11px;
+  color: var(--ph);
+  white-space: nowrap;
+}
+.history-empty {
+  color: var(--ph);
+  font-size: 12px;
+  font-style: italic;
+}
+
 #log-container { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 #log-container h3 { font-size: 13px; color: var(--ph); margin-bottom: 4px; }
 #log {

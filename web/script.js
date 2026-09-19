@@ -488,9 +488,50 @@ function openOutputFolder() {
   fetch('/api/open-output');
 }
 
+/* ── История прошлых обработок (#14) ─────────────────────── */
+
+function toggleHistory() {
+  const list = document.getElementById('history-list');
+  const on = list.style.display !== 'none';
+  list.style.display = on ? 'none' : '';
+  document.getElementById('history-toggle').textContent = on ? '▸' : '▾';
+}
+
+async function loadHistory() {
+  const count = document.getElementById('history-count');
+  const list = document.getElementById('history-list');
+  try {
+    const resp = await fetch('/api/history');
+    const data = await resp.json();
+    const files = data.files || [];
+    count.textContent = files.length ? `(${files.length})` : '';
+    if (files.length === 0) {
+      list.innerHTML = '<li class="history-empty">Пока нет готовых файлов</li>';
+      list.style.display = '';
+      document.getElementById('history-toggle').textContent = '▾';
+      return;
+    }
+    list.innerHTML = files.map(f => `
+      <li data-name="${escapeHtml(f.name)}" title="Открыть папку">
+        <span class="history-name">${escapeHtml(f.name)}</span>
+        <span class="history-size">${formatSize(f.size)}</span>
+      </li>`).join('');
+    list.querySelectorAll('li:not(.history-empty)').forEach(li => {
+      li.addEventListener('click', () => openHistoryFile(li.dataset.name));
+    });
+  } catch (_) {
+    count.textContent = '';
+  }
+}
+
+function openHistoryFile(name) {
+  fetch(`/api/open-output?select=${encodeURIComponent(name)}`);
+}
+
 /* ── Инициализация ──────────────────────────────────────── */
 
 async function init() {
+  loadHistory();
   try {
     const gpuResp = await fetch('/api/gpu');
     const gpu = await gpuResp.json();

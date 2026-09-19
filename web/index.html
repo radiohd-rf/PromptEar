@@ -54,6 +54,15 @@
           <textarea id="context-prompt" placeholder="Контекст (тема, имена, термины)" rows="2"></textarea>
         </div>
 
+        <div id="history-block">
+          <div class="history-header" onclick="toggleHistory()">
+            <span>Ранее обработанные</span>
+            <span id="history-count" class="history-count"></span>
+            <span id="history-toggle">▸</span>
+          </div>
+          <ul id="history-list" style="display:none"></ul>
+        </div>
+
 <div id="log-container">
           <h3>Лог</h3>
           <div id="log"></div>
