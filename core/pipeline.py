@@ -221,9 +221,9 @@ class SaveStep(PipelineStep):
             return result
 
         filepath = result.audio.original_path or result.audio.path
-        out_path = filepath.with_suffix(f".{config.output_format}")
+        out_dir = config.output_dir or filepath.parent
+        out_path = out_dir / f"{filepath.stem}.{config.output_format}"
         if config.output_format == "docx":
-            save_docx(out_path, result.text)
             save_docx(out_path, result.text)
         else:
             save_text_output(

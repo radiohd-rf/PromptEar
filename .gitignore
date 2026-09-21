@@ -47,6 +47,7 @@ out*.txt
 *.zip
 _build_*/
 output/
+uploads/
 _tmp_*/
 
 # OS

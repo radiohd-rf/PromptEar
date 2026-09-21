@@ -47,6 +47,8 @@ WEB_DIR = Path(__file__).resolve().parent
 BASE_DIR = WEB_DIR.parent
 UPLOAD_DIR = BASE_DIR / "output"
 UPLOAD_DIR.mkdir(exist_ok=True)
+INBOX_DIR = BASE_DIR / "uploads"
+INBOX_DIR.mkdir(exist_ok=True)
 
 PORT = int(os.environ.get("PROMPTEAR_PORT", 5000))
 
@@ -196,18 +198,17 @@ def _process_files(task_id: str) -> None:
             skip_requested=skip_requested,
         )
 
-        # удаляем загруженные исходные файлы (они не нужны, цель — docx)
-        for f_path_str in task.get("uploaded_files", []):
-            p = Path(f_path_str)
-            if p.exists():
-                p.unlink()
-
         emit(DoneEvent("Готово"))
 
     except Exception as exc:
         logger.error(f"Pipeline error: {exc}", exc_info=True)
         emit(ErrorEvent(str(exc)))
     finally:
+        # загруженные исходники чистим всегда — они временные копии в uploads/
+        for f_path_str in task.get("uploaded_files", []):
+            p = Path(f_path_str)
+            if p.exists():
+                p.unlink(missing_ok=True)
         shutil.rmtree(TEMP_DIR / task_id, ignore_errors=True)
         emit_queue.put_nowait({"type": "__done__"})
 
@@ -242,7 +243,7 @@ def upload_files():
     for f in request.files.getlist("files"):
         if f.filename:
             safe_name = re.sub(r'[<>:"/\\|?*]+', "_", f.filename)
-            dest = UPLOAD_DIR / f"{stamp}-{safe_name}"
+            dest = INBOX_DIR / f"{stamp}-{safe_name}"
             f.save(str(dest))
             saved.append(str(dest))
             display_names[str(dest)] = f.filename
@@ -445,7 +446,8 @@ def enhance_file(task_id, filename):
         return jsonify({"error": f"Ошибка улучшения: {exc}"}), 500
 
     filepath = result.audio.original_path or result.audio.path
-    out_path = filepath.with_suffix(f".{task.get('output_format', 'docx')}")
+    out_dir = task.get("output_dir") or filepath.parent
+    out_path = Path(out_dir) / f"{filepath.stem}.{task.get('output_format', 'docx')}"
     if out_path.suffix.lower() == ".docx":
         save_docx(out_path, result.text)
     else:
