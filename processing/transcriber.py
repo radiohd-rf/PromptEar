@@ -74,32 +74,66 @@ class Transcriber:
 
         on_segment вызывается с накопленным сырым текстом по мере распознавания
         (для живого черновика в UI).
-        """
-        self.load_model()
 
+        Тяжёлый блокирующий вызов faster-whisper выполняется в фоновом потоке:
+        при установке cancel метод сразу возвращает частичный результат, а
+        брошенный поток догорает до ближайшей границы сегмента и тихо выходит
+        (проверки cancel между сегментами ограничивают догорание одним сегментом).
+        Доступ к модели сериализован self._lock: faster-whisper не потокобезопасен,
+        следующий файл ждёт освобождения модели обычным образом.
+        """
         language = kwargs.pop("language", "ru")
         beam_size = kwargs.pop("beam_size", 5)
         vad_filter = kwargs.pop("vad_filter", True)
 
-        segments, info = self._model.transcribe(
-            str(audio_path),
-            language=language,
-            beam_size=beam_size,
-            vad_filter=vad_filter,
-            **kwargs,
-        )
         parts: list[str] = []
         raw_segments: list[Segment] = []
-        accumulated: list[str] = []
-        for seg in segments:
+        info_box: dict[str, Any] = {}
+        done = threading.Event()
+        abandoned = threading.Event()
+
+        def worker() -> None:
+            try:
+                self.load_model()
+                with self._lock:
+                    if abandoned.is_set():
+                        return
+                    segments, info = self._model.transcribe(
+                        str(audio_path),
+                        language=language,
+                        beam_size=beam_size,
+                        vad_filter=vad_filter,
+                        **kwargs,
+                    )
+                    info_box["info"] = info
+                    acc: list[str] = []
+                    for seg in segments:
+                        if abandoned.is_set():
+                            break
+                        if cancel is not None and cancel.is_set():
+                            break
+                        parts.append(seg.text)
+                        raw_segments.append(
+                            Segment(start=seg.start, end=seg.end, text=seg.text)
+                        )
+                        acc.append(seg.text)
+                        if on_segment is not None and not abandoned.is_set():
+                            on_segment(" ".join(acc))
+            finally:
+                done.set()
+
+        threading.Thread(target=worker, daemon=True).start()
+        while not done.wait(0.05):
             if cancel is not None and cancel.is_set():
+                abandoned.set()
                 break
-            parts.append(seg.text)
-            raw_segments.append(Segment(start=seg.start, end=seg.end, text=seg.text))
-            accumulated.append(seg.text)
-            if on_segment is not None:
-                on_segment(" ".join(accumulated))
-        return " ".join(parts), raw_segments, float(getattr(info, "duration", 0.0) or 0.0)
+        duration = 0.0
+        info = info_box.get("info")
+        if info is not None:
+            duration = float(getattr(info, "duration", 0.0) or 0.0)
+        if not duration and raw_segments:
+            duration = float(raw_segments[-1].end or 0.0)
+        return " ".join(parts), raw_segments, duration
 
     def unload(self):
         """Выгружает модель из памяти."""

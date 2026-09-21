@@ -14,7 +14,7 @@ const statusLabels = {
   queued: 'В очереди',
   processing: 'Подготовка',
   transcribing: 'В обработке',
-  enhancing: 'Улучшение ИИ',
+  enhancing: 'Обработка',
   done: 'Готово',
   skipped: 'Пропущено',
 };
@@ -135,11 +135,28 @@ function addFiles(fileList) {
 }
 
 function removeFile(idx) {
-  fileStatuses[files[idx].name] = undefined;
-  delete fileTexts[files[idx].name];
-  delete fileBadges[files[idx].name];
+  const name = files[idx].name;
+  const st = fileStatuses[name];
+  // Файл в работе или в очереди запущенной задачи: остановить обработку на бэке.
+  // У бэка свой список файлов, просто убрать строку из UI недостаточно.
+  if (taskId && st && st !== 'done' && st !== 'skipped') {
+    fetch(`/api/skip/${taskId}/${encodeURIComponent(name)}`, { method: 'POST' }).catch(() => {});
+  }
+  fileStatuses[name] = undefined;
+  delete fileTexts[name];
+  delete fileBadges[name];
   files.splice(idx, 1);
+  if (currentFileName === name) currentFileName = null;
+  if (liveFile === name) liveFile = null;
   renderFileList();
+  // перевести live-индикацию на оставшийся активный файл
+  const next = firstActiveFile();
+  if (next) {
+    setLiveFile(next);
+    document.getElementById('skip-btn').style.display = '';
+  } else {
+    document.getElementById('skip-btn').style.display = 'none';
+  }
 }
 
 function renderFileList() {
@@ -155,7 +172,6 @@ function renderFileList() {
   list.innerHTML = files.map((f, i) => {
     const st = fileStatuses[f.name] || 'queued';
     const clickable = st !== 'queued';
-    const removable = !fileStatuses[f.name] || st === 'queued';
     const selected = f.name === currentFileName && clickable;
     return `<li class="file-item ${clickable ? 'clickable' : ''} ${selected ? 'selected' : ''}"
       data-name="${escapeHtml(f.name)}" onclick="selectFile('${escapeJs(f.name)}')">
@@ -163,7 +179,7 @@ function renderFileList() {
       <span class="file-name">${escapeHtml(f.name)}</span>
       <span class="file-size">${formatSize(f.size)}</span>
       <span class="status status-${st}">${statusLabels[st] || 'В очереди'}</span>
-      ${removable ? `<span class="remove" onclick="event.stopPropagation(); removeFile(${i})">✕</span>` : ''}
+      <span class="remove" onclick="event.stopPropagation(); removeFile(${i})" title="Убрать из списка" aria-label="Убрать из списка">✕</span>
     </li>`;
   }).join('');
 }
@@ -265,7 +281,6 @@ function handleEvent(msg) {
         finishStreaming(msg.text, false);
       } else {
         setStreamingText(msg.text);
-        updateBadge('Черновик (Whisper)');
       }
       if (msg.final && enhanceMode === 'ask') {
         showEnhanceButton();
@@ -289,7 +304,7 @@ function handleEvent(msg) {
           el.textContent = draft;
           el.scrollTop = el.scrollHeight;
         }
-        updateBadge('Улучшение ИИ');
+
       } else if (lastPassText != null) {
         // предыдущий проход завершён — его полный текст мы уже получили,
         // плавно переходим: мигание → затухание → появление
@@ -298,16 +313,18 @@ function handleEvent(msg) {
       break;
 
     case 'enhancing_stream':
+      if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
       liveFile = currentFileName || msg.filename || firstActiveFile();
       setLiveFile(liveFile);
       fileTexts[liveFile] = msg.text;
-      fileBadges[liveFile] = 'Улучшение ИИ';
+      fileBadges[liveFile] = 'Обработка';
       // не печатаем по токенам: копим полный текст прохода,
       // он появится целиком на переходе к следующему проходу
       lastPassText = msg.text;
       break;
 
     case 'result':
+      if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
       liveFile = currentFileName || msg.filename || firstActiveFile();
       setLiveFile(liveFile);
       fileTexts[liveFile] = msg.text;
@@ -317,6 +334,7 @@ function handleEvent(msg) {
       break;
 
     case 'file_status':
+      if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
       fileStatuses[msg.filename] = msg.status;
       if (msg.status === 'transcribing') {
         liveFile = msg.filename;
@@ -327,6 +345,7 @@ function handleEvent(msg) {
       break;
 
     case 'skipped':
+      if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
       fileStatuses[msg.filename] = 'skipped';
       fileBadges[msg.filename] = fileBadges[msg.filename] || 'Черновик';
       liveFile = currentFileName || msg.filename;
@@ -336,6 +355,7 @@ function handleEvent(msg) {
       break;
 
     case 'progress':
+      if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
       liveFile = currentFileName || msg.filename;
       setLiveFile(liveFile);
       break;
@@ -576,7 +596,7 @@ function stopTyping() {
 // вместо мгновенного скачка (иначе в переходе whisper→gemma всё «допрыгивает»).
 function finishStreaming(text, improved) {
   const el = document.getElementById('result-text');
-  updateBadge(improved ? 'Улучшено ИИ' : 'Черновик (Whisper)');
+
   // если печать уже шла и текст просто нарос — плавно добираем хвост
   if (typeTarget && typingStarted && text.length > typeShownLen) {
     typeTarget = text;
@@ -602,20 +622,16 @@ function resetResult() {
   hideEnhanceButton();
   hideEnhanceProgress();
   setResultText('', false);
-  updateBadge('Черновик');
+
 }
 
-function updateBadge(text) {
-  const badge = document.getElementById('result-badge');
-  badge.textContent = text || 'Черновик';
-  badge.classList.toggle('improved', text === 'Улучшено ИИ');
-}
+
 
 function setResultText(text, improved) {
   resetTyping();
   const el = document.getElementById('result-text');
   el.textContent = text;
-  updateBadge(improved ? 'Улучшено ИИ' : (text ? 'Черновик (Whisper)' : 'Черновик'));
+
 }
 
 function showEnhanceProgress(activePass, totalPasses) {
@@ -816,18 +832,62 @@ async function init() {
     const llm = await llmResp.json();
     const el = document.getElementById('llm-status');
     const engine = llm.engine ? ` (${llm.engine})` : '';
+    const errBox = document.getElementById('llm-error-box');
     if (llm.llm_ok) {
       el.textContent = `LLM${engine}: ${llm.model_ok ? 'модель найдена' : 'модель не найдена'}`;
+      el.classList.remove('off');
+      if (errBox) errBox.classList.add('hidden');
     } else {
       el.textContent = `LLM${engine}: не обнаружен`;
       el.classList.add('off');
+      if (errBox) {
+        document.getElementById('llm-error-text').textContent =
+          llm.error || 'Порт по умолчанию занят или движок не запущен.';
+        errBox.classList.remove('hidden');
+      }
     }
   } catch (_) {
     document.getElementById('llm-status').textContent = 'LLM: ошибка';
   }
 }
 
+async function applyLlmPort() {
+  const input = document.getElementById('llm-port-input');
+  const btn = document.getElementById('llm-port-apply');
+  const port = input ? parseInt(input.value, 10) : NaN;
+  if (!port || isNaN(port)) {
+    input.value = '';
+    input.placeholder = 'Введите порт 1024–65535';
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/llm/port', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({port}),
+    });
+    const data = await resp.json();
+    btn.disabled = false;
+    if (data.ok) {
+      document.getElementById('llm-error-box').classList.add('hidden');
+      document.getElementById('llm-status').textContent =
+        `LLM (${data.engine}): запущен на порту ${data.port}`;
+      document.getElementById('llm-status').classList.remove('off');
+    } else {
+      document.getElementById('llm-error-text').textContent =
+        data.error || 'Не удалось запустить LLM на этом порту.';
+    }
+  } catch (_) {
+    btn.disabled = false;
+    document.getElementById('llm-error-text').textContent =
+      'Ошибка соединения с сервером.';
+  }
+}
+
 document.addEventListener('DOMContentLoaded', init);
+
+document.getElementById('llm-port-apply')?.addEventListener('click', applyLlmPort);
 
 window.addEventListener('resize', () => syncFileListHeight());
 

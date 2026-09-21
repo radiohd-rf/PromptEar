@@ -71,7 +71,7 @@ class DetectPreprocessStep(PipelineStep):
         cancel: Event,
     ) -> TranscriptionResult:
         filepath = result.audio.path
-        whisper_mode = AudioDetector.is_quiet(filepath)
+        whisper_mode = AudioDetector.is_quiet(filepath, cancel=cancel)
         if whisper_mode:
             emit(LogEvent("  Тихий звук — включаю усиленный режим"))
 

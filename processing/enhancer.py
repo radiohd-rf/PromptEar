@@ -7,6 +7,7 @@ SAGE — однопроходный корректор орфографии/пу
 import json
 import os
 import re
+import socket
 import subprocess
 import time
 from abc import ABC, abstractmethod
@@ -42,6 +43,20 @@ PASS_LABELS = {
     "pass3": "Структура (абзацы, диалоги, без воды)",
 }
 
+# Фактический порт, на который реально поднялся llama-server в этом процессе.
+# Позволяет /api/llm видеть порт, выбранный авто-подбором или вручную, даже
+# если константа LLAMA_SERVER_PORT (8080) занята чужим процессом.
+_llama_actual_port: int | None = None
+
+# Последняя причина, почему llama-server не запустился (модульная, потому что
+# /api/llm создаёт свежий инстанс enhancer через create_enhancer()).
+_llama_last_error: str | None = None
+
+
+def get_llm_error() -> str | None:
+    """Возвращает последнюю известную причину, почему llama-server не запустился."""
+    return _llama_last_error
+
 
 class BaseEnhancer(ABC):
     """Общий интерфейс улучшения текста."""
@@ -73,9 +88,11 @@ class BaseEnhancer(ABC):
 class LlamaCppEnhancer(BaseEnhancer):
     """Улучшение текста через llama-server (OpenAI-совместимый API) + gemma-4-E2B."""
 
-    def __init__(self, model: str = LLM_MODEL):
+    def __init__(self, model: str = LLM_MODEL, port: int | None = None):
         self.model = model
         self.base_url = LLM_BASE_URL
+        self.port_override = port
+        self.last_error: str | None = None
         self._session: requests.Session | None = None
 
     def _get_session(self) -> requests.Session:
@@ -89,13 +106,27 @@ class LlamaCppEnhancer(BaseEnhancer):
     def is_available(self) -> tuple[bool, bool]:
         """Проверяет запущен ли llama-server и есть ли GGUF-файл.
 
-        Возвращает (server_ok, model_ok).
+        Возвращает (server_ok, model_ok). Сначала проверяется фактический порт
+        (авто-подобранный или выбранный вручную), затем сканируется диапазон
+        LLAMA_SERVER_PORT..+50 на предмет уже запущенного llama-server.
         """
-        try:
-            r = requests.get(f"{self.base_url}/health", timeout=5)
-            server_ok = r.status_code == 200
-        except requests.RequestException:
-            server_ok = False
+        global _llama_actual_port
+        prime = (_llama_actual_port, self.port_override, LLAMA_SERVER_PORT)
+        candidates = [p for p in prime if p is not None]
+        for p in range(LLAMA_SERVER_PORT, LLAMA_SERVER_PORT + 50):
+            if p not in candidates:
+                candidates.append(p)
+        server_ok = False
+        for port in candidates:
+            try:
+                r = requests.get(f"http://127.0.0.1:{port}/health", timeout=1.5)
+                if r.status_code == 200:
+                    _llama_actual_port = port
+                    self.base_url = f"http://127.0.0.1:{port}"
+                    server_ok = True
+                    break
+            except requests.RequestException:
+                continue
         if not server_ok:
             return False, False
         return True, LLM_MODEL_PATH.exists()
@@ -509,17 +540,99 @@ class LlamaCppEnhancer(BaseEnhancer):
 
         return self._start_server(server_exe, progress_callback)
 
-    def _start_server(self, server_exe, progress_callback=None) -> bool:
-        """Запускает llama-server и ждёт /health."""
+    def _pick_port(self, preferred: int | None = None) -> int | None:
+        """Возвращает свободный TCP-порт.
+
+        Сначала пробует self.port_override (порт, который пользователь указал
+        вручную), затем preferred, затем LLAMA_SERVER_PORT и далее подряд.
+        Если свободных нет — None, чтобы не запускать llama-server на занятый
+        порт и не врать про /health.
+        """
+        candidates = [
+            p for p in (self.port_override, preferred, LLAMA_SERVER_PORT) if p is not None
+        ]
+        candidates += [
+            p for p in range(LLAMA_SERVER_PORT, LLAMA_SERVER_PORT + 50) if p not in candidates
+        ]
+        for port in candidates:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                # НЕ ставить SO_REUSEADDR: на Windows он позволяет bind поверх
+                # активно слушающего порта (WinError 10048 появляется только без
+                # него), из-за чего llama-server потом не может занять порт.
+                try:
+                    s.bind(("127.0.0.1", port))
+                    return port
+                except OSError:
+                    continue
+        return None
+
+    def _find_running_llama(self, preferred: int | None = None) -> int | None:
+        """Ищет уже запущенный llama-server в диапазоне портов.
+
+        Проверяет /health на каждом кандидате. Если сервер отвечает — возвращает
+        его порт (Чтобы не поднимать второй экземпляр модели в память).
+        """
+        candidates = []
+        for p in (self.port_override, preferred, LLAMA_SERVER_PORT):
+            if p is not None and p not in candidates:
+                candidates.append(p)
+        candidates += [
+            p for p in range(LLAMA_SERVER_PORT, LLAMA_SERVER_PORT + 50) if p not in candidates
+        ]
+        for port in candidates:
+            try:
+                r = requests.get(f"http://127.0.0.1:{port}/health", timeout=2)
+                if r.status_code == 200:
+                    return port
+            except requests.RequestException:
+                continue
+        return None
+
+    def _start_server(
+        self, server_exe, progress_callback=None, prefer_port: int | None = None
+    ) -> bool:
+        """Запускает llama-server и ждёт /health.
+
+        Возвращает True при успехе; причина провала сохраняется в self.last_error
+        и доступна через /api/llm. prefer_port — конкретный порт, если пользователь
+        выбрал его вручную.
+        """
+        global _llama_actual_port, _llama_last_error
+        self.last_error = None
         if self.is_available()[0]:
             return True
+
+        # Если llama-server уже запущен в диапазоне портов (например, его поднял
+        # пользователь вручную на 8081, пока 8080 занят httpd) — используем его,
+        # а не спавним второй экземпляр с загрузкой модели в память.
+        existing = self._find_running_llama(prefer_port)
+        if existing is not None:
+            _llama_actual_port = existing
+            self.base_url = f"http://127.0.0.1:{existing}"
+            return True
+
+        port = self._pick_port(prefer_port)
+        if port is None:
+            error_msg = (
+                f"Не удалось подобрать свободный порт для llama-server "
+                f"(все {LLAMA_SERVER_PORT}–{LLAMA_SERVER_PORT + 49} заняты). "
+                f"Закройте процесс, занимающий {LLAMA_SERVER_PORT}–{LLAMA_SERVER_PORT + 9}, "
+                f"или выберите порт вручную в настройках."
+            )
+            self.last_error = error_msg
+            _llama_last_error = error_msg
+            if progress_callback:
+                progress_callback(f"Ошибка: {error_msg}")
+            return False
+
+        self.base_url = f"http://127.0.0.1:{port}"
 
         cmd = [
             str(server_exe),
             "-m", str(LLM_MODEL_PATH),
             "-c", str(LLM_CONTEXT),
             "--host", "127.0.0.1",
-            "--port", str(LLAMA_SERVER_PORT),
+            "--port", str(port),
             "--threads", str(max(1, os.cpu_count() or 4)),
         ]
         subprocess.Popen(
@@ -534,13 +647,42 @@ class LlamaCppEnhancer(BaseEnhancer):
             progress_callback("Ожидание запуска llama-server...")
         for _ in range(60):
             try:
-                r = requests.get(f"{LLM_BASE_URL}/health", timeout=2)
+                r = requests.get(f"{self.base_url}/health", timeout=2)
                 if r.status_code == 200:
+                    _llama_actual_port = port
                     return True
             except requests.RequestException:
                 pass
             time.sleep(2)
+        self.last_error = f"llama-server на порту {port} не ответил на /health за 2 мин."
+        _llama_last_error = self.last_error
         return False
+
+    def start_server(self, progress_callback=None, port: int | None = None) -> bool:
+        """Пытается поднять llama-server (ручной перезапуск, возможно с другим портом).
+
+        port=None → авто-подбор первого свободного.
+        """
+        global _llama_last_error
+        server_exe = self._find_server_exe()
+        if server_exe is None:
+            self.last_error = "llama-server.exe не найден — запустите «Установить LLM»."
+            _llama_last_error = self.last_error
+            return False
+        if not LLM_MODEL_PATH.exists():
+            self.last_error = f"Модель не найдена: {LLM_MODEL_PATH}"
+            _llama_last_error = self.last_error
+            return False
+        return self._start_server(server_exe, progress_callback, prefer_port=port)
+
+    def _find_server_exe(self):
+        """Ищет llama-server.exe в LLAMA_DIR (или подпапках)."""
+        server_exe = LLAMA_DIR / "llama-server.exe"
+        if server_exe.exists():
+            return server_exe
+        for candidate in LLAMA_DIR.rglob("llama-server.exe"):
+            return candidate
+        return None
 
 
 class SageEnhancer(BaseEnhancer):

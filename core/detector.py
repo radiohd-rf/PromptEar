@@ -23,8 +23,18 @@ class AudioDetector:
     """Определяет тихое аудио и выполняет предобработку через ffmpeg."""
 
     @staticmethod
-    def is_quiet(path: Path, emit: Callable[[PipelineEvent], None] | None = None) -> bool:
-        """True если средняя громкость ниже порога."""
+    def is_quiet(
+        path: Path,
+        emit: Callable[[PipelineEvent], None] | None = None,
+        cancel: Event | None = None,
+    ) -> bool:
+        """True если средняя громкость ниже порога.
+
+        Скан выполняется через Popen с опросом флага cancel: при отмене
+        ffmpeg убивается и метод сразу возвращает False (файл всё равно
+        пропускается, значение флага уже не важно). stderr дренируется в
+        фоновом потоке, иначе переполнение буфера повесит ffmpeg навсегда.
+        """
         try:
             path = path.resolve()
             cmd = [
@@ -37,15 +47,35 @@ class AudioDetector:
                 "null",
                 "-",
             ]
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=FFMPEG_TIMEOUT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
-            for line in result.stderr.splitlines():
+            assert proc.stderr is not None
+            lines: list[str] = []
+
+            def _drain() -> None:
+                assert proc.stderr is not None
+                for chunk in proc.stderr:
+                    lines.append(chunk.decode("utf-8", errors="replace"))
+
+            drain = threading.Thread(target=_drain, daemon=True)
+            drain.start()
+            start = time.monotonic()
+            while proc.poll() is None:
+                if cancel is not None and cancel.is_set():
+                    proc.kill()
+                    proc.wait()
+                    return False
+                if time.monotonic() - start > FFMPEG_TIMEOUT:
+                    proc.kill()
+                    proc.wait()
+                    raise TimeoutError(f"ffmpeg volumedetect > {FFMPEG_TIMEOUT}с")
+                time.sleep(0.1)
+            drain.join(timeout=2)
+            for line in lines:
                 if "mean_volume" in line:
                     val = line.split(":")[1].strip().replace(" dB", "")
                     mean_db = float(val)

@@ -466,15 +466,6 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   padding: var(--sp-3) var(--sp-4);
 }
 .live-header h3 { font-size: var(--fs-label); font-weight: 500; color: var(--md-on-surface-variant); margin: 0; }
-#result-badge {
-  font-size: 11px;
-  font-weight: 500;
-  padding: 2px var(--sp-3);
-  border-radius: var(--r-pill);
-  background: var(--md-secondary-container);
-  color: var(--md-on-secondary-container);
-}
-#result-badge.improved { background: var(--md-success-container); color: var(--md-success); }
 #enhance-btn {
   display: inline-flex;
   align-items: center;
@@ -583,6 +574,47 @@ footer span:empty { display: none; }
   display: flex;
   align-items: center;
   gap: var(--sp-1);
+}
+
+.hidden {
+  display: none !important;
+}
+
+#llm-error-box {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--sp-1);
+  background: var(--md-error-container);
+  color: var(--md-on-error-container);
+  font-size: var(--fs-label);
+}
+
+.llm-port-field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+#llm-port-input {
+  width: 9em;
+  padding: var(--sp-1);
+  border: 1px solid var(--md-outline);
+  border-radius: var(--sp-1);
+  background: var(--md-surface);
+  color: var(--md-on-surface);
+  font-size: var(--fs-label);
+}
+
+#llm-port-apply {
+  padding: var(--sp-1) var(--sp-2);
+  border: none;
+  border-radius: var(--sp-1);
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+  cursor: pointer;
+  font-size: var(--fs-label);
 }
 #logs-btn {
   display: inline-flex;

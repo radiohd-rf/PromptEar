@@ -70,7 +70,6 @@
         <div id="live-container">
           <div class="live-header">
             <h3>Лайв-трансляция</h3>
-            <span id="result-badge">Черновик</span>
             <button id="enhance-btn" style="display:none" onclick="enhanceDraft()">
               <svg viewBox="0 0 24 24"><path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7zM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/></svg>
               Улучшить с ИИ
@@ -129,6 +128,13 @@
   <footer>
     <span id="gpu-status"></span>
     <span id="llm-status"></span>
+    <div id="llm-error-box" class="hidden">
+      <span id="llm-error-text"></span>
+      <span class="llm-port-field">
+        <input type="number" id="llm-port-input" min="1024" max="65535" placeholder="Порт 8080-8130, напр. 8081">
+        <button id="llm-port-apply">Применить</button>
+      </span>
+    </div>
     <div id="footer-actions">
       <button class="icon-btn line-icon" id="help-btn" onclick="openHelp()" title="Инструкция" aria-label="Инструкция">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>

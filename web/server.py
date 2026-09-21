@@ -6,6 +6,7 @@ import os
 import queue
 import re
 import shutil
+import socket
 import threading
 import uuid
 from datetime import datetime
@@ -32,7 +33,7 @@ from core.events import (
 )
 from core.models import AudioFile, PipelineConfig
 from core.pipeline import run_pipeline as run_pipeline_core
-from processing.enhancer import create_enhancer
+from processing.enhancer import create_enhancer, get_llm_error
 from processing.transcriber import Transcriber
 from utils.extract_audio import extract_audio
 from utils.files import find_supported_files, is_video_file, save_docx, save_text_output
@@ -130,6 +131,8 @@ def _process_files(task_id: str) -> None:
     emit_queue = task["queue"]
 
     def emit(event):
+        if isinstance(event, SkippedEvent) and task.get("skip_file") == event.filename:
+            task["skip_file"] = None  # пропуск отработан — можно запрашивать следующий
         with contextlib.suppress(queue.Full):
             emit_queue.put_nowait(_event_to_dict(event))
         event_str = _event_to_dict(event)
@@ -468,9 +471,52 @@ def llm_check():
     try:
         enhancer = create_enhancer()
         llm_ok, model_ok = enhancer.is_available()
-        return jsonify({"llm_ok": llm_ok, "model_ok": model_ok, "engine": LLM_ENGINE})
+        error = None
+        if not llm_ok:
+            error = getattr(enhancer, "last_error", None) or get_llm_error()
+        return jsonify(
+            {
+                "llm_ok": llm_ok,
+                "model_ok": model_ok,
+                "engine": LLM_ENGINE,
+                "error": error,
+            }
+        )
     except Exception as exc:
         return jsonify({"llm_ok": False, "model_ok": False, "error": str(exc)})
+
+
+@app.route("/api/llm/port", methods=["POST"])
+def llm_set_port():
+    """Задаёт порт llama-server вручную и пытается перезапустить движок."""
+    data = request.get_json(silent=True) or {}
+    try:
+        port = int(data.get("port") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Некорректный порт"}), 400
+    if not (1024 <= port <= 65535):
+        return jsonify({"ok": False, "error": "Порт должен быть в диапазоне 1024–65535"}), 400
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", port))
+        sock.close()
+    except OSError:
+        return jsonify({"ok": False, "error": f"Порт {port} уже занят другим процессом"}), 409
+
+    try:
+        enhancer = create_enhancer()
+        if not hasattr(enhancer, "start_server"):
+            return jsonify({"ok": False, "error": "Текущий LLM-движок не умеет менять порт"}), 400
+        if hasattr(enhancer, "port_override"):
+            enhancer.port_override = port
+        ok = enhancer.start_server(port=port)
+        params = {"ok": ok, "port": port, "engine": LLM_ENGINE}
+        if not ok:
+            params["error"] = getattr(enhancer, "last_error", None)
+        return jsonify(params)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route("/api/open-output")
