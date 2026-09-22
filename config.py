@@ -15,6 +15,9 @@ TEMP_DIR: Final[Path] = BASE_DIR / "temp"
 # Кэши моделей внутри портативной папки (не BrokenCache WebView2 — диск)
 MODELS_DIR = BASE_DIR / "models"
 HF_HOME = MODELS_DIR / "hf"
+# huggingface_hub (SAGE-модель и метаданные) пишет в папку программы, а не в
+# C:\Users\<user>\.cache\huggingface. setdefault — уважаем явный системный HF_HOME.
+os.environ.setdefault("HF_HOME", str(HF_HOME))
 CT2_CACHE = MODELS_DIR / "ct2"
 LLM_MODEL_DIR = MODELS_DIR / "llm"
 SAGE_MODEL_DIR = MODELS_DIR / "sage"
@@ -39,7 +42,9 @@ PREPROCESS_HIGHPASS_FREQ = 80  # убирает инфразвук
 PREPROCESS_LOWPASS_FREQ = 8000  # убирает ВЧ-шум (речь 300-4000 Гц)
 
 # ── Whisper ─────────────────────────────────────────────────────────────────
-WHISPER_MODEL = "medium"
+# Модель по умолчанию (устанавливается из settings.json; каталог в
+# core/whisper_models.py). tiny — самая лёгкая, вшивается в сборку.
+WHISPER_DEFAULT_MODEL = "base"
 
 # ── LLM-движок ──────────────────────────────────────────────────────────────
 LLM_ENGINE = "llama"  # "llama" | "sage"
@@ -57,6 +62,13 @@ LLM_NUM_PREDICT = -1
 LLM_CONTEXT = 4096
 LLM_RETRIES = 1  # повтор запроса при таймауте (фикс бага #15)
 LLM_MODEL_PATH = LLM_MODEL_DIR / LLM_MODEL_FILENAME
+
+# URL прямого скачивания GGUF (HF-хостинг).
+# Файл: gemma-4-E2B-it-UD-Q4_K_XL.gguf (3.0 ГБ), Apache-2.0.
+GGUF_URL = (
+    "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/"
+    "gemma-4-E2B-it-UD-Q4_K_XL.gguf"
+)
 
 # ── SAGE (FRED-T5-1.7B, однопроходный корректор) ───────────────────────────
 SAGE_HF_REPO = "ai-forever/sage-v1.1.0"

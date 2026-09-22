@@ -8,6 +8,17 @@ rem Порт llama-server: 8080 занят системным Apache (httpd), и
 rem Сам сервер поднимается один раз вручную/при установке и живёт отдельно.
 set "PROMPTEAR_LLM_PORT=8081"
 
+rem Обычный запуск — БЕЗ терминала: перезапускаем себя скрытно через wscript.
+rem Консоль остаётся видимой только в ветке bootstrap (установка зависимостей).
+if "%PROMPTEAR_HIDDEN%"=="1" goto :start
+if not exist "%VENV_DIR%\Scripts\python.exe" goto :start
+set "PROMPTEAR_HIDDEN=1"
+if exist "%APP_DIR%hidden.vbs" (
+    wscript //nologo "%APP_DIR%hidden.vbs" "%~f0"
+    exit /b
+)
+
+:start
 if not exist "%VENV_DIR%\Scripts\python.exe" (
     echo [PromptEar] Virtual environment not found.
     echo [PromptEar] Running setup first...
@@ -21,5 +32,8 @@ if not exist "%VENV_DIR%\Scripts\python.exe" (
     )
 )
 
-"%VENV_DIR%\Scripts\python.exe" "%APP_DIR%main.py"
-pause
+if exist "%VENV_DIR%\Scripts\pythonw.exe" (
+    "%VENV_DIR%\Scripts\pythonw.exe" "%APP_DIR%main.py"
+) else (
+    "%VENV_DIR%\Scripts\python.exe" "%APP_DIR%main.py"
+)

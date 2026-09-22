@@ -41,9 +41,11 @@ class PipelineConfig:
     output_format: str = "docx"
     multi_pass: bool = False
     initial_prompt: str | None = None
+    hotwords: str | None = None  # фразы для биаса Whisper (через запятую)
     llm_available: bool = False
     enhance_mode: str = ENHANCE_AUTO
     temp_dir: Path | None = None
+    timestamps: bool = False  # префикс [MM:SS] перед строками стенограммы
 
 
 @dataclass

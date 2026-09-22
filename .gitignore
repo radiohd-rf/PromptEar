@@ -13,6 +13,9 @@ llama/
 models/
 llama_server.pid
 
+# Runtime temp (файлы обработки/скачивания — внутри папки программы)
+temp/
+
 # Build artifacts
 dist/
 build/

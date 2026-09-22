@@ -35,8 +35,12 @@ from core.models import (
     PipelineConfig,
     TranscriptionResult,
 )
-from utils.files import save_docx, save_text_output
-from utils.gpu import get_torch_device
+from utils.files import (
+    build_paragraph_timestamps,
+    ensure_timestamps,
+    save_docx,
+    save_text_output,
+)
 
 
 class PipelineStep(ABC):
@@ -114,17 +118,24 @@ class TranscribeStep(PipelineStep):
         audio_path = result.audio.preprocessed_path
         kwargs: dict[str, Any] = {
             "language": "ru",
-            "beam_size": 5,
+            "beam_size": 8,  # консервативнее: шире луч, меньше конфабуляций омофонов
+            "temperature": [0.0],  # без сброса на сэмплинг: детерминированнее
             "vad_filter": True,
         }
         if config.initial_prompt:
             kwargs["initial_prompt"] = config.initial_prompt
+        if config.hotwords:
+            kwargs["hotwords"] = config.hotwords
 
         filename = result.audio.display_name or result.audio.path.name
         emit(FileStatusEvent(filename=filename, status="transcribing"))
 
-        def on_segment(accumulated: str) -> None:
-            emit(DraftEvent(text=accumulated, final=False))
+        def on_segment(segments_so_far: list) -> None:
+            if config.timestamps:
+                text_so_far = build_paragraph_timestamps(segments_so_far, "")
+            else:
+                text_so_far = " ".join(s.text for s in segments_so_far)
+            emit(DraftEvent(text=text_so_far, final=False))
 
         text, segments, duration = self._transcriber.transcribe_with_segments(
             audio_path, cancel=cancel, on_segment=on_segment, **kwargs
@@ -132,7 +143,10 @@ class TranscribeStep(PipelineStep):
         result.text = text
         result.segments = segments
         result.duration_sec = duration
-        emit(DraftEvent(text=text, final=True))
+        final_text = (
+            build_paragraph_timestamps(segments, text) if config.timestamps else text
+        )
+        emit(DraftEvent(text=final_text, final=True))
         emit(LogEvent(f"  Распознано ({len(text)} символов): {result.preview}"))
         return result
 
@@ -184,13 +198,25 @@ class EnhanceStep(PipelineStep):
                     )
                 )
 
+            # Если включены таймкоды — отдаём модели уже размеченный текст:
+            # метки [MM:SS] от Whisper видны Gemma, и промпты (keep_timestamps)
+            # заставляют её переносить маркеры вместе с фрагментами текста.
+            enhance_input = result.text
+            if config.timestamps and result.segments:
+                enhance_input = build_paragraph_timestamps(result.segments, result.text)
+
             result.text = self._enhancer.enhance_multi_pass(
-                result.text,
+                enhance_input,
                 config.initial_prompt or "",
                 progress_callback=mp_progress,
                 cancel=cancel,
                 stream_callback=mp_stream,
+                timestamps=config.timestamps,
             )
+            # Страховка: если модель всё же потеряла метки — восстанавливаем
+            # разметку (точную по сегментам или пропорциональную).
+            if config.timestamps and result.segments:
+                result.text = ensure_timestamps(result.segments, result.text)
             emit(ResultEvent(text=result.text, filename=filename))
             emit(LogEvent("  Многопроходное улучшение завершено"))
         except Exception as exc:
@@ -223,13 +249,22 @@ class SaveStep(PipelineStep):
         filepath = result.audio.original_path or result.audio.path
         out_dir = config.output_dir or filepath.parent
         out_path = out_dir / f"{filepath.stem}.{config.output_format}"
+        text_to_save = result.text
+        if (
+            config.timestamps
+            and config.output_format.lower() not in ("srt", "vtt")
+            and result.segments
+        ):
+            # Сохраняем как есть, если метки уже стоят (расставила Gemma),
+            # иначе восстанавливаем разметку (точную/пропорциональную).
+            text_to_save = ensure_timestamps(result.segments, result.text)
         if config.output_format == "docx":
-            save_docx(out_path, result.text)
+            save_docx(out_path, text_to_save)
         else:
             save_text_output(
                 out_path,
                 config.output_format,
-                result.text,
+                text_to_save,
                 segments=result.segments,
                 duration=result.duration_sec,
             )
@@ -292,8 +327,22 @@ class AudioPipeline:
         """
         try:
             total = len(files)
-            device = get_torch_device().upper()
-            emit(LogEvent(f"  Модель: medium | Устройство: {device}"))
+            from core import settings as settings_store
+
+            st = settings_store.load()
+            model_name = st.get("whisper_model") or "base"
+            device = "CPU"
+            gpu_note = ""
+            if st.get("use_gpu", False):
+                if transcriber is not None:
+                    reason = transcriber.gpu_probe()
+                    if reason is None:
+                        device = "CUDA"
+                    else:
+                        gpu_note = f" (GPU недоступен: {reason})"
+                else:
+                    device = "CUDA"
+            emit(LogEvent(f"  Модель: {model_name} | Устройство: {device}{gpu_note}"))
 
             steps = list(self.steps)
             for i, step in enumerate(steps):

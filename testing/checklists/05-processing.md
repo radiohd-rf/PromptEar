@@ -52,7 +52,7 @@ python -c "import torch; print(torch.cuda.is_available())"
 
 ### Transcribe (Whisper)
 
-- [ ] Модель: medium, язык: ru
+- [ ] Модель: small, язык: ru
 - [ ] VAD фильтр включён (пропускает тишину)
 - [ ] Beam search: 5
 - [ ] Передаётся контекст (initial_prompt)

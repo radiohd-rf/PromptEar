@@ -7,9 +7,29 @@ let isDark = null;            // null = системная тема; true/false 
 let enhanceMode = 'auto';
 let currentFileName = null;
 let liveFile = null;
+let launchParams = {};   // последние параметры запуска (формат, тайм-коды, ИИ, модель, GPU)
+let appSettings = {whisper_model: 'base', use_gpu: false, output_format: 'docx', timestamps: false, ai_enabled: false};
+let modelCatalog = {};
+let installedModel = null;
+let gemmaInstalled = false;
+let gpuReport = null;
+let activeDownload = null;   // {id, kind, model, label} | null
+let downloadResolver = null; // {resolve, reject} — ожидающий startDownload()
+
+function downloadBlockingRun() {
+  return !!activeDownload && activeDownload.kind === 'whisper';
+}
 const fileStatuses = {};   // имя -> status
 const fileTexts = {};      // имя -> последний текст (черновик/улучшенный)
 const fileBadges = {};     // имя -> бейдж
+const fileTranslations = {}; // имя -> {lang, text, outputPath} — последний перевод
+let translateBusy = false;  // идёт перевод («Переводим…»)
+let translateError = '';    // текст ошибки последнего перевода
+let translateAbort = null;  // AbortController активного перевода
+let translateCancelling = false; // пользователь нажал «Отмена»
+let llmDownloadCb = null;   // колбэк после успешной установки модели ИИ
+let llmPollTimer = null;
+let llmCancelRequested = false; // пользователь нажал «Отмена» во время скачивания
 const statusLabels = {
   queued: 'В очереди',
   processing: 'Подготовка',
@@ -109,6 +129,402 @@ function formatSize(n) {
   return n + ' Б';
 }
 
+/* ── Модальные окна ──────────────────────────────────────── */
+
+function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+function openLaunchModal() {
+  fillModal('launch-overlay');
+  openModal('launch-overlay');
+  document.getElementById('launch-apply').focus();
+}
+function closeLaunchModal() { closeModal('launch-overlay'); }
+
+function openSettingsModal() {
+  fillModal('settings-overlay');
+  openModal('settings-overlay');
+}
+function closeSettingsModal() { closeModal('settings-overlay'); }
+
+function modelOptions() {
+  return Object.entries(modelCatalog)
+    .sort((a, b) => a[1].size_mb - b[1].size_mb)
+    .map(([alias, info]) => {
+      const mark = info.installed ? ' ✓' : ` (~${info.size_mb} МБ)`;
+      const desc = info.installed ? '' : ` — ${info.description}`;
+      return `<option value="${alias}">${alias}${desc}${mark}</option>`;
+    }).join('');
+}
+
+const FORMAT_HINTS = {
+  docx: 'Документ Word (.docx) — для чтения и правок в Word.',
+  txt: 'Простой текстовый файл (.txt).',
+  md: 'Markdown-разметка (.md) — для Obsidian, GitHub, заметок.',
+  srt: 'Субтитры SRT с тайм-кодами — для плееров.',
+  vtt: 'Веб-субтитры VTT — для видео на сайтах и YouTube.',
+};
+
+function updateFormatHints() {
+  for (const rootId of ['launch-overlay', 'settings-overlay']) {
+    const el = document.querySelector(`#${rootId} [data-field="format"]`);
+    const hint = document.getElementById(`${rootId.replace('-overlay', '')}-format-hint`);
+    if (!el || !hint) continue;
+    hint.textContent = FORMAT_HINTS[el.value] || '';
+  }
+}
+
+function setGpuCheckbox(root) {
+  const gpu = root.querySelector('[data-field="gpu"]');
+  const label = root.querySelector('[data-field="gpu-label"]');
+  if (!gpu) return;
+  const noNvidia = !(gpuReport && gpuReport.has_nvidia_gpu);
+  gpu.disabled = noNvidia;
+  if (noNvidia) {
+    gpu.checked = false;
+    label.textContent = 'Использовать GPU (не обнаружен)';
+  } else {
+    gpu.checked = !!appSettings.use_gpu;
+    label.textContent = 'Использовать GPU';
+  }
+}
+
+function fillModal(rootId) {
+  const root = document.getElementById(rootId);
+  const field = (f) => root.querySelector(`[data-field="${f}"]`);
+  const fmt = field('format');
+  if (fmt) fmt.value = appSettings.output_format || 'docx';
+  const ts = field('timestamps');
+  if (ts) ts.checked = !!appSettings.timestamps;
+  const ai = field('ai');
+  if (ai) ai.checked = !!appSettings.ai_enabled;
+  const model = field('model');
+  if (model) {
+    model.innerHTML = modelOptions();
+    model.value = installedModel || appSettings.whisper_model || 'base';
+  }
+  setGpuCheckbox(root);
+  updateFormatHints();
+}
+
+function collectModal(rootId) {
+  const root = document.getElementById(rootId);
+  const field = (f) => root.querySelector(`[data-field="${f}"]`);
+  return {
+    output_format: field('format').value,
+    timestamps: !!field('timestamps').checked,
+    ai_enabled: !!field('ai').checked,
+    whisper_model: field('model').value,
+    use_gpu: !!field('gpu').checked,
+  };
+}
+
+async function saveSettings(patch) {
+  const resp = await fetch('/api/settings', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(patch),
+  });
+  const data = await resp.json();
+  Object.assign(appSettings, data);
+  return data;
+}
+
+async function applyAndRun() {
+  if (downloadBlockingRun()) {
+    addLog('⚠ Идёт скачивание модели — дождитесь завершения');
+    return;
+  }
+  const params = collectModal('launch-overlay');
+  launchParams = params;
+  appSettings = Object.assign({}, appSettings, params);
+  try {
+    await saveSettings(params);
+  } catch (err) {
+    addLog(`Ошибка сохранения настроек: ${err.message}`);
+    return;
+  }
+  closeLaunchModal();
+  runPipeline();
+}
+
+async function saveSettingsFromModal() {
+  const params = collectModal('settings-overlay');
+  launchParams = params;
+  appSettings = Object.assign({}, appSettings, params);
+  try {
+    await saveSettings(params);
+  } catch (err) {
+    addLog(`Ошибка сохранения настроек: ${err.message}`);
+    return;
+  }
+  const portInput = document.querySelector('#settings-overlay [data-field="llm-port"]');
+  if (portInput && portInput.value) {
+    await applyLlmPort(parseInt(portInput.value, 10));
+  }
+  closeSettingsModal();
+  addLog('✅ Настройки сохранены');
+}
+
+/* ── Подтверждение и скачивания ──────────────────────────── */
+
+function confirmPopup(message) {
+  return new Promise((resolve) => {
+    document.getElementById('confirm-text').textContent = message;
+    openModal('confirm-overlay');
+    const yes = document.getElementById('confirm-yes');
+    const no = document.getElementById('confirm-no');
+    const cleanup = () => {
+      yes.onclick = null;
+      no.onclick = null;
+      closeModal('confirm-overlay');
+    };
+    yes.onclick = () => { cleanup(); resolve(true); };
+    no.onclick = () => { cleanup(); resolve(false); };
+  });
+}
+
+function showDownloadModal() {
+  openModal('download-overlay');
+  const bar = document.getElementById('dl-bar');
+  const pct = document.getElementById('dl-pct');
+  bar.classList.remove('indeterminate');
+  bar.style.width = '0%';
+  pct.textContent = '';
+}
+function hideDownloadModal() { closeModal('download-overlay'); }
+
+function updateDownloadUi(msg) {
+  const label = document.getElementById('dl-label');
+  const bar = document.getElementById('dl-bar');
+  const pct = document.getElementById('dl-pct');
+  label.textContent = msg.label || 'Скачивание…';
+  if (msg.total_mb != null && msg.total_mb > 0) {
+    bar.classList.remove('indeterminate');
+    const p = Math.max(0, Math.min(100, msg.pct));
+    bar.style.width = p + '%';
+    pct.textContent = `${msg.done_mb.toFixed(1)} / ${msg.total_mb.toFixed(1)} МБ (${p}%)`;
+  } else {
+    bar.classList.add('indeterminate');
+    pct.textContent = '';
+  }
+}
+
+function startDownload(kind, model) {
+  return new Promise((resolve, reject) => {
+    if (downloadResolver) {
+      reject(new Error('Скачивание уже идёт'));
+      return;
+    }
+    downloadResolver = {resolve, reject};
+    showDownloadModal();
+    fetch('/api/downloads', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({kind, model}),
+    })
+      .then(r => r.json().then(d => ({ok: r.ok, d})))
+      .then(({ok, d}) => {
+        if (!ok) {
+          throw new Error(d.error || 'Скачивание не запустилось');
+        }
+      })
+      .catch((err) => {
+        downloadResolver = null;
+        hideDownloadModal();
+        addLog(`Ошибка: ${err.message}`);
+        reject(err);
+      });
+  });
+}
+
+function handleDownloadEvent(msg) {
+  switch (msg.type) {
+    case 'download_active':
+      activeDownload = msg.status && msg.status.active;
+      if (activeDownload) showDownloadModal();
+      break;
+    case 'download_progress':
+      activeDownload = activeDownload || {};
+      activeDownload.label = msg.label;
+      updateDownloadUi(msg);
+      break;
+    case 'download_done': {
+      activeDownload = null;
+      const r = downloadResolver;
+      downloadResolver = null;
+      hideDownloadModal();
+      if (r) r.resolve();
+      refreshModels();
+      refreshGpu();
+      refreshLlmStatus();
+      break;
+    }
+    case 'download_failed': {
+      const err = new Error(msg.error || 'Скачивание не удалось');
+      activeDownload = null;
+      const r = downloadResolver;
+      downloadResolver = null;
+      hideDownloadModal();
+      addLog('❌ ' + err.message);
+      if (r) r.reject(err);
+      break;
+    }
+  }
+}
+
+function connectDownloads() {
+  const es = new EventSource('/api/downloads/stream');
+  es.onmessage = (e) => {
+    if (e.data === ': keepalive') return;
+    try {
+      handleDownloadEvent(JSON.parse(e.data));
+    } catch (_) {}
+  };
+}
+
+async function refreshGpu() {
+  try {
+    gpuReport = await (await fetch('/api/gpu')).json();
+    refreshGpuStatusUI();
+  } catch (_) {
+    const el = document.getElementById('gpu-status');
+    el.classList.remove('off');
+    el.classList.add('red');
+    el.textContent = 'GPU: ошибка проверки';
+  }
+}
+
+function refreshGpuStatusUI() {
+  const el = document.getElementById('gpu-status');
+  if (!gpuReport) { el.textContent = 'GPU: …'; return; }
+  const onGpu = !!appSettings.use_gpu && !!gpuReport.cuda_available;
+  el.textContent = onGpu ? 'Используется GPU' : 'Используется CPU';
+  el.classList.toggle('off', !onGpu);
+  el.classList.remove('red');
+}
+
+async function refreshModels() {
+  try {
+    const data = await (await fetch('/api/models')).json();
+    modelCatalog = data.catalog || {};
+    installedModel = data.installed;
+    gemmaInstalled = !!data.gemma_installed;
+    if (data.current) appSettings.whisper_model = data.current;
+    syncEnhanceButton();
+  } catch (_) {}
+}
+
+async function refreshSettings() {
+  try {
+    const data = await (await fetch('/api/settings')).json();
+    appSettings = Object.assign({}, appSettings, data);
+    const portInput = document.querySelector('#settings-overlay [data-field="llm-port"]');
+    if (portInput && data.llm_port) portInput.value = data.llm_port;
+    refreshGpuStatusUI();
+  } catch (_) {}
+}
+
+/* ── Поля настройки: изменение модели / ИИ / GPU ──────────── */
+
+function handleModelChange(e) {
+  const sel = e.target;
+  const target = sel.value;
+  const info = modelCatalog[target];
+  if (!info) return;
+  if (info.installed || target === installedModel) return;
+  const cur = installedModel ? ` Текущая модель (${installedModel}) будет удалена.` : '';
+  confirmPopup(`Скачать модель ${target} (~${info.size_mb} МБ)?${cur}`)
+    .then(async (ok) => {
+      if (!ok) {
+        sel.value = installedModel || appSettings.whisper_model || 'base';
+        return;
+      }
+      try {
+        await startDownload('whisper', target);
+        await refreshModels();
+      } catch (_) {
+        sel.value = installedModel || appSettings.whisper_model || 'base';
+      }
+    });
+}
+
+function handleAiChange(e) {
+  const cb = e.target;
+  if (!cb.checked) return;
+  if (gemmaInstalled) return;
+  confirmPopup('Скачать модель ИИ (~3 ГБ)? Это займёт время. Продолжить?')
+    .then(async (ok) => {
+      if (!ok) {
+        cb.checked = false;
+        return;
+      }
+      try {
+        await startDownload('gemma');
+        await refreshModels();
+      } catch (_) {
+        cb.checked = false;
+      }
+    });
+}
+
+async function handleGpuChange(e) {
+  const cb = e.target;
+  if (!gpuReport) return;
+  if (!cb.checked) {
+    appSettings.use_gpu = false;
+    try {
+      await saveSettings({use_gpu: false});
+    } catch (_) {}
+    refreshGpuStatusUI();
+    const restart = await confirmPopup('GPU выключен. Перезапустить программу?');
+    if (restart) {
+      fetch('/api/restart', {method: 'POST'}).catch(() => {});
+    }
+    return;
+  }
+  confirmPopup('Проверить доступность GPU?')
+    .then(async (ok) => {
+      if (!ok) {
+        cb.checked = false;
+        return;
+      }
+      if (!gpuReport.has_nvidia_gpu) {
+        await confirmPopup('GPU NVIDIA не обнаружен. Доступность не подтверждена.');
+        cb.checked = false;
+        return;
+      }
+      const enable = await confirmPopup('Доступен. Включить использование видеокарты?');
+      if (!enable) {
+        cb.checked = false;
+        return;
+      }
+      try {
+        await saveSettings({use_gpu: true});
+        appSettings.use_gpu = true;
+        refreshGpuStatusUI();
+        const restart = await confirmPopup('GPU включён. Перезапустить программу?');
+        if (restart) {
+          fetch('/api/restart', {method: 'POST'}).catch(() => {});
+        }
+      } catch (_) {
+        cb.checked = false;
+      }
+    })
+    .catch(() => {
+      cb.checked = false;
+    });
+}
+
+document.addEventListener('change', (e) => {
+  const el = e.target;
+  const field = el && el.dataset && el.dataset.field;
+  if (field === 'model') handleModelChange(e);
+  else if (field === 'ai') handleAiChange(e);
+  else if (field === 'gpu') handleGpuChange(e);
+  else if (field === 'format') updateFormatHints();
+});
+
 /* ── Drag & Drop ─────────────────────────────────────────── */
 
 function onDrop(e) {
@@ -145,6 +561,7 @@ function removeFile(idx) {
   fileStatuses[name] = undefined;
   delete fileTexts[name];
   delete fileBadges[name];
+  delete fileTranslations[name];
   files.splice(idx, 1);
   if (currentFileName === name) currentFileName = null;
   if (liveFile === name) liveFile = null;
@@ -190,21 +607,162 @@ function selectFile(name) {
   renderFileList();
   const text = fileTexts[name] || '';
   const improved = fileBadges[name] === 'Улучшено ИИ';
-  setResultText(text, improved);
+  const tr = fileTranslations[name];
+  if (tr) {
+    // файл был переведён — показываем последний перевод
+    setResultText(tr.text, true);
+  } else {
+    setResultText(text, improved);
+  }
+  syncEnhanceButton();
+  syncTranslateButton();
+}
+
+// Кнопка «Перевести» — видна всегда, когда есть текст результата;
+// в ручном режиме (none) её не прячем — перевод независим от улучшения.
+// Состояния: idle «Перевести» → busy «Отмена»+спиннер → «Переведено (LANG)».
+// Кнопка «Оригинал» (↺) — видна только когда у файла есть сохранённый перевод.
+function onTranslateClick() {
+  if (translateBusy) {
+    cancelTranslate();
+    return;
+  }
+  openTranslateModal();
+}
+
+function syncTranslateButton() {
+  const name = currentFileName;
+  const text = (name && fileTexts[name]) || '';
+  const btn = document.getElementById('translate-btn');
+  const label = document.getElementById('translate-label');
+  const iconEl = document.getElementById('translate-icon');
+  const spinner = document.getElementById('translate-spinner');
+  const sel = document.getElementById('translate-lang');
+  const resetBtn = document.getElementById('translate-reset-btn');
+  const hasTr = !!(name && fileTranslations[name]);
+  if (resetBtn) resetBtn.style.display = hasTr ? '' : 'none';
+  if (enhanceBusy) {
+    // идёт улучшение — кнопка перевода не нужна (показан «Остановить улучшение»)
+    btn.style.display = 'none';
+    if (sel) sel.style.display = 'none';
+    if (resetBtn) resetBtn.style.display = 'none';
+    return;
+  }
+  if (translateBusy) {
+    btn.style.display = '';
+    btn.disabled = false; // это теперь «Остановить перевод»
+    btn.classList.add('busy');
+    if (label) label.textContent = 'Остановить перевод';
+    if (spinner) spinner.style.display = '';
+    if (iconEl) iconEl.style.display = 'none';
+    if (sel) sel.style.display = 'none';
+    if (resetBtn) resetBtn.style.display = 'none';
+    return;
+  }
+  btn.disabled = false;
+  btn.classList.remove('busy');
+  if (spinner) spinner.style.display = 'none';
+  if (iconEl) iconEl.style.display = '';
+  if (label) {
+    const tr = name && fileTranslations[name];
+    label.textContent = (tr && tr.lang)
+      ? `Переведено (${tr.lang.toUpperCase()})`
+      : 'Перевести';
+  }
+  if (text) {
+    btn.style.display = '';
+    if (sel) sel.style.display = '';
+  } else {
+    btn.style.display = 'none';
+    if (sel) sel.style.display = 'none';
+  }
+}
+
+// Возвращает исходный текст в лайв-окно (перевод остаётся сохранён в файле,
+// удаляется только из состояния просмотра, чтобы можно было переводить заново).
+function resetTranslation() {
+  const name = currentFileName;
+  if (!name || !fileTranslations[name]) return;
+  delete fileTranslations[name];
+  const improved = fileBadges[name] === 'Улучшено ИИ';
+  setResultText(fileTexts[name] || '', improved);
+  syncEnhanceButton();
+  syncTranslateButton();
+}
+
+// Статус/кнопка «Улучшить с ИИ» для текущего файла:
+//  - переведённый текст → кнопка «Улучшить с ИИ» (улучшается исходная расшифровка)
+//  - улучшенный текст → не-кликабельный статус «Улучшено с ИИ»
+//  - черновик в ручном режиме → кнопка «Улучшить с ИИ»
+//  - в режиме «с обработкой» (auto), когда нет перевода → кнопки нет (SSE 'result')
+// Единое место синхронизации: вызывается при выборе файла и после улучшения.
+function syncEnhanceButton() {
+  const btn = document.getElementById('enhance-btn');
+  const label = document.getElementById('enhance-label');
+  const iconEl = document.getElementById('enhance-icon');
+  const spinner = document.getElementById('enhance-spinner');
+  if (enhanceBusy) {
+    // идёт улучшение: вместо статуса — кнопка «Остановить улучшение» со спиннером
+    btn.style.display = '';
+    btn.disabled = false;
+    btn.classList.add('busy');
+    if (label) label.textContent = 'Остановить улучшение';
+    if (iconEl) iconEl.style.display = 'none';
+    if (spinner) spinner.style.display = '';
+    hideEnhanceStatus();
+    return;
+  }
+  if (translateBusy) {
+    // идёт перевод — кнопка улучшения не нужна (показан «Остановить перевод»)
+    hideEnhanceButton();
+    return;
+  }
+  btn.disabled = false;
+  btn.classList.remove('busy');
+  if (spinner) spinner.style.display = 'none';
+  if (iconEl) iconEl.style.display = '';
+  if (label) label.textContent = 'Улучшить с ИИ';
+  const name = currentFileName;
+  const text = (name && fileTexts[name]) || '';
+  const improved = fileBadges[name] === 'Улучшено ИИ';
+  const tr = fileTranslations[name];
+  if (tr) {
+    // после перевода кнопку «Улучшить с ИИ» не прячем: улучшение работает по
+    // исходной расшифровке (перевод — отдельный файл и остаётся на диске),
+    // после улучшения текст в лайв-окне снова на исходном языке, перевести можно повторно
+    hideEnhanceStatus();
+    showEnhanceButton();
+  } else if (improved) {
+    hideEnhanceButton();
+    showEnhanceStatus('Улучшено с ИИ');
+  } else if (enhanceMode !== 'auto' && text) {
+    showEnhanceButton();
+  } else {
+    hideEnhanceButton();
+    hideEnhanceStatus();
+  }
 }
 
 /* ── Загрузка и обработка ────────────────────────────────── */
 
 async function runPipeline() {
   if (files.length === 0) return;
+  if (downloadBlockingRun()) {
+    addLog('⚠ Идёт скачивание модели — дождитесь завершения');
+    return;
+  }
 
+  const p = launchParams && launchParams.whisper_model ? launchParams : appSettings;
   const formData = new FormData();
   for (const f of files) {
     formData.append('files', f);
   }
-  formData.append('output_format', document.getElementById('output-format').value);
-  enhanceMode = document.getElementById('enhance-mode').value;
-  formData.append('enhance_mode', enhanceMode);
+  formData.append('ai', p.ai_enabled ? '1' : '0');
+  enhanceMode = p.ai_enabled ? 'auto' : 'none';
+  formData.append('output_format', p.output_format || 'docx');
+  formData.append('timestamps', p.timestamps ? '1' : '0');
+  formData.append('whisper_model', p.whisper_model || 'base');
+  formData.append('use_gpu', p.use_gpu ? '1' : '0');
 
   const ctx = document.getElementById('context-prompt').value.trim();
   if (ctx) formData.append('initial_prompt', ctx);
@@ -282,8 +840,11 @@ function handleEvent(msg) {
       } else {
         setStreamingText(msg.text);
       }
-      if (msg.final && enhanceMode === 'ask') {
-        showEnhanceButton();
+      if (msg.final && enhanceMode !== 'auto') {
+        syncEnhanceButton();
+      }
+      if (msg.final) {
+        syncTranslateButton();
       }
       break;
 
@@ -331,6 +892,8 @@ function handleEvent(msg) {
       fileBadges[liveFile] = 'Улучшено ИИ';
       hideEnhanceProgress();
       startPassTransition(msg.text);
+      syncEnhanceButton();
+      syncTranslateButton();
       break;
 
     case 'file_status':
@@ -382,7 +945,7 @@ function handleEvent(msg) {
       addLog('✅ ' + msg.message);
       addLog('📁 Результаты сохранены в папке "output"');
       document.getElementById('skip-btn').style.display = 'none';
-      if (enhanceMode === 'ask') {
+      if (enhanceMode !== 'auto') {
         awaitSyncAskResult().then(() => finish());
       } else {
         finish();
@@ -448,7 +1011,7 @@ function finish() {
   if (eventSource) { eventSource.close(); eventSource = null; }
   setBusy(false);
   document.getElementById('skip-btn').style.display = 'none';
-  if (enhanceMode !== 'ask') {
+  if (enhanceMode === 'auto') {
     hideEnhanceButton();
     hideEnhanceProgress();
   }
@@ -620,8 +1183,13 @@ function resetResult() {
   currentFileName = null;
   liveFile = null;
   hideEnhanceButton();
+  hideEnhanceStatus();
   hideEnhanceProgress();
   setResultText('', false);
+  document.getElementById('translate-btn').style.display = 'none';
+  document.getElementById('translate-lang').style.display = 'none';
+  const resetBtn = document.getElementById('translate-reset-btn');
+  if (resetBtn) resetBtn.style.display = 'none';
 
 }
 
@@ -688,8 +1256,45 @@ function startPassTransition(newText) {
   }, 5000);
 }
 
+let enhanceBusy = false;
+let enhanceAbort = null;       // AbortController активного улучшения
+let enhanceCancelling = false; // пользователь нажал «Остановить улучшение»
+
+function onEnhanceClick() {
+  if (enhanceBusy) {
+    cancelEnhance();
+  } else {
+    enhanceDraft();
+  }
+}
+
+// Прерывает идущее улучшение: рвёт HTTP-запрос и сигналит серверу (llama стопает генерацию).
+async function cancelEnhance() {
+  if (!enhanceBusy || !taskId || !currentFileName) return;
+  enhanceCancelling = true;
+  if (enhanceAbort) enhanceAbort.abort();
+  try {
+    await fetch(
+      `/api/enhance/cancel/${taskId}/${encodeURIComponent(currentFileName)}`,
+      { method: 'POST' }
+    );
+  } catch (e) { /* не критично — HTTP уже прерван */ }
+}
+
+function showEnhanceStatus(text) {
+  const st = document.getElementById('enhance-status');
+  st.textContent = text;
+  st.style.display = '';
+  document.getElementById('enhance-btn').style.display = 'none';
+}
+
+function hideEnhanceStatus() {
+  document.getElementById('enhance-status').style.display = 'none';
+}
+
 function showEnhanceButton() {
   document.getElementById('enhance-btn').style.display = '';
+  hideEnhanceStatus();
 }
 
 function hideEnhanceButton() {
@@ -707,18 +1312,35 @@ function copyResult() {
 }
 
 async function enhanceDraft() {
-  if (!taskId || !currentFileName) return;
-  const btn = document.getElementById('enhance-btn');
-  if (!btn) return;
-  btn.disabled = true;
-  setBtnLabel(btn, 'Улучшаем…');
+  if (!taskId || !currentFileName || enhanceBusy) return;
+  // задача уже завершена и SSE закрыт (finish) — переподключаемся,
+  // чтобы лайв-трансляция показывала проходы улучшения
+  if (!eventSource) {
+    connectSSE(taskId);
+  }
+  const prevTr = fileTranslations[currentFileName]; // был перевод — обновим после улучшения
+  const retranslate = !!(prevTr && prevTr.lang);
+  enhanceCancelling = false;
+  enhanceBusy = true;
+  enhanceAbort = new AbortController();
+  hideEnhanceStatus();           // статус «Улучшаем…» заменяет кнопка «Остановить улучшение»
   showEnhanceProgress(1, 3);
+  fileStatuses[currentFileName] = 'enhancing';
+  fileBadges[currentFileName] = 'Обработка';
+  syncEnhanceButton();
+  syncTranslateButton(); // во время улучшения кнопку «Перевести» скрываем
+  renderFileList();
+  let enhanceOk = false;
   try {
-    const resp = await fetch(`/api/enhance/${taskId}/${encodeURIComponent(currentFileName)}`, { method: 'POST' });
+    const resp = await fetch(`/api/enhance/${taskId}/${encodeURIComponent(currentFileName)}`, {
+      method: 'POST',
+      signal: enhanceAbort.signal,
+    });
     const data = await resp.json();
     if (data.error) {
       addLog(`❌ ${data.error}`);
     } else {
+      enhanceOk = true;
       fileTexts[currentFileName] = data.text;
       fileBadges[currentFileName] = 'Улучшено ИИ';
       hideEnhanceProgress();
@@ -726,19 +1348,241 @@ async function enhanceDraft() {
       addLog('✅ Текст улучшен и перезаписан');
     }
   } catch (err) {
-    addLog(`❌ ${err.message}`);
+    if (err && err.name === 'AbortError') {
+      addLog('⏹ Улучшение остановлено');
+    } else {
+      addLog(`❌ ${err.message}`);
+    }
   } finally {
-    btn.disabled = false;
-    setBtnLabel(btn, 'Улучшить с ИИ');
-    hideEnhanceButton();
+    enhanceBusy = false;
+    enhanceAbort = null;
+    enhanceCancelling = false;
+    hideEnhanceProgress();
+    fileStatuses[currentFileName] = 'done';
+    renderFileList();
+    if (enhanceOk) {
+      if (retranslate) {
+        // был перевод — автоматически переводим улучшенный текст на тот же язык
+        // (сервер уже хранит улучшенный текст в result.text — отдельный вызов translate)
+        syncEnhanceButton();
+        syncTranslateButton();
+      } else {
+        // успешно улучшенный файл: показываем не-кликабельный статус
+        showEnhanceStatus('Улучшено с ИИ');
+        syncTranslateButton();
+      }
+    } else {
+      // ошибка/отмена улучшения — вернуть кнопку, можно повторить
+      syncEnhanceButton();
+      syncTranslateButton();
+    }
+  }
+  if (enhanceOk && retranslate) {
+    await doTranslate(prevTr.lang, prevTr.langName || prevTr.lang);
   }
 }
 
-function setBtnLabel(btn, text) {
-  // сохраняем inline-SVG иконку: меняем только текстовый узел
-  const icon = btn.querySelector('svg');
-  btn.textContent = text;
-  if (icon) btn.prepend(icon);
+function openTranslateModal() {
+  if (!taskId || !currentFileName || translateBusy) return;
+  document.getElementById('translate-overlay').style.display = '';
+}
+
+function closeTranslateModal() {
+  document.getElementById('translate-overlay').style.display = 'none';
+}
+
+// Предложение скачать модель ИИ (gemma), если она нужна для перевода.
+function offerLlmDownload(cb) {
+  llmDownloadCb = cb || null;
+  document.getElementById('llm-dl-progress').style.display = 'none';
+  document.getElementById('llm-dl-text').style.display = '';
+  document.getElementById('llm-dl-error').style.display = 'none';
+  document.getElementById('llm-dl-error').textContent = '';
+  document.getElementById('llm-dl-yes').disabled = false;
+  document.getElementById('llm-dl-yes').textContent = 'Скачать модель';
+  document.getElementById('llm-dl-yes').style.display = '';
+  document.getElementById('llm-dl-cancel').disabled = false;
+  document.getElementById('llm-dl-cancel').style.display = '';
+  document.getElementById('llm-dl-overlay').style.display = '';
+}
+
+function closeLlmDownload() {
+  if (llmPollTimer) { clearTimeout(llmPollTimer); llmPollTimer = null; }
+  document.getElementById('llm-dl-overlay').style.display = 'none';
+  llmDownloadCb = null;
+}
+
+async function startLlmDownload() {
+  llmCancelRequested = false;
+  document.getElementById('llm-dl-yes').style.display = 'none';
+  document.getElementById('llm-dl-cancel').style.display = '';
+  document.getElementById('llm-dl-cancel').textContent = 'Отмена';
+  document.getElementById('llm-dl-cancel').disabled = false;
+  document.getElementById('llm-dl-text').style.display = 'none';
+  document.getElementById('llm-dl-error').style.display = 'none';
+  const prog = document.getElementById('llm-dl-progress');
+  prog.style.display = '';
+  document.getElementById('llm-dl-bar').style.width = '40%';
+  document.getElementById('llm-dl-bar').classList.add('indeterminate');
+  document.getElementById('llm-dl-label').textContent = 'Подготовка…';
+  try {
+    await fetch('/api/llm/download', { method: 'POST' });
+  } catch (e) { /* опрос всё равно покажет состояние */ }
+  pollLlmInstall();
+}
+
+// Прерывает скачивание модели ИИ (активно только во время скачивания).
+async function cancelLlmDownload() {
+  llmCancelRequested = true;
+  if (llmPollTimer) { clearTimeout(llmPollTimer); llmPollTimer = null; }
+  document.getElementById('llm-dl-cancel').disabled = true;
+  document.getElementById('llm-dl-label').textContent = 'Остановка…';
+  try {
+    await fetch('/api/llm/cancel', { method: 'POST' });
+  } catch (e) { /* сервер всё равно увидит cancel при опросе */ }
+  closeLlmDownload();
+}
+
+function pollLlmInstall() {
+  clearTimeout(llmPollTimer);
+  llmPollTimer = setTimeout(async () => {
+    try {
+      const resp = await fetch('/api/llm');
+      const st = await resp.json();
+      if (st.installing) {
+        document.getElementById('llm-dl-label').textContent = 'Скачивание модели ИИ… (может занять несколько минут)';
+        pollLlmInstall();
+        return;
+      }
+      if (llmCancelRequested) {
+        document.getElementById('llm-dl-overlay').style.display = 'none';
+        llmCancelRequested = false;
+        llmDownloadCb = null;
+        return;
+      }
+      if (st.llm_ok && st.model_ok) {
+        document.getElementById('llm-dl-overlay').style.display = 'none';
+        const cb = llmDownloadCb;
+        llmDownloadCb = null;
+        if (cb) cb();
+        return;
+      }
+      const msg = st.install_error || st.error || 'Не удалось установить модель';
+      document.getElementById('llm-dl-label').textContent = 'Не удалось установить модель';
+      const errEl = document.getElementById('llm-dl-error');
+      errEl.textContent = msg;
+      errEl.style.display = '';
+      document.getElementById('llm-dl-progress').style.display = 'none';
+      document.getElementById('llm-dl-yes').style.display = '';
+      document.getElementById('llm-dl-yes').textContent = 'Повторить';
+      document.getElementById('llm-dl-cancel').style.display = '';
+    } catch (err) {
+      document.getElementById('llm-dl-label').textContent = 'Ошибка связи с сервером';
+      pollLlmInstall();
+    }
+  }, 2500);
+}
+
+async function translateDraft() {
+  if (!taskId || !currentFileName || translateBusy) return;
+  closeTranslateModal();
+  const sel = document.getElementById('translate-lang');
+  const lang = sel ? sel.value : 'en';
+  const langName = sel && sel.selectedOptions && sel.selectedOptions[0]
+    ? sel.selectedOptions[0].textContent
+    : lang;
+  await doTranslate(lang, langName);
+}
+
+// Переводит текущий файл на язык (lang/langName) и показывает результат.
+// Возвращает true при успехе. Используется и по кнопке перевода, и для
+// автоматического перевода улучшенного текста после «Улучшить с ИИ».
+async function doTranslate(lang, langName) {
+  if (!taskId || !currentFileName || translateBusy) return false;
+  translateError = '';
+  translateCancelling = false;
+  translateBusy = true;
+  translateAbort = new AbortController();
+  fileStatuses[currentFileName] = 'enhancing'; // «Обработка» в списке файлов
+  hideEnhanceStatus();
+  syncTranslateButton();
+  syncEnhanceButton(); // во время перевода кнопку «Улучшить» скрываем
+  renderFileList();
+  let ok = false;
+  try {
+    const resp = await fetch(
+      `/api/translate/${taskId}/${encodeURIComponent(currentFileName)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: translateAbort.signal,
+        body: JSON.stringify({ language_code: lang, language_name: langName }),
+      }
+    );
+    const data = await resp.json();
+    if (data.error) {
+      addLog(`❌ ${data.error}`);
+      throw new Error(data.error);
+    } else {
+      ok = true;
+      const name = currentFileName;
+      fileTranslations[name] = {
+        lang,
+        langName: data.language_name || langName || lang,
+        text: data.text,
+        outputPath: data.output_path,
+      };
+      fileStatuses[name] = 'done';
+      setResultText(data.text, true);
+      addLog(`✅ Перевод (${langName}): ${data.output_path}`);
+    }
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      translateError = '';
+      addLog('⏹ Перевод отменён');
+    } else {
+      translateError = err.message;
+      addLog(`❌ ${err.message}`);
+    }
+  } finally {
+    translateBusy = false;
+    translateAbort = null;
+    translateCancelling = false;
+    fileStatuses[currentFileName] = 'done';
+    renderFileList();
+    if (ok) {
+      translateError = '';
+      syncEnhanceButton();
+      syncTranslateButton();
+    } else if (translateError) {
+      // ошибка перевода — вернуть кнопку, можно повторить; показать причину
+      syncEnhanceButton();
+      syncTranslateButton();
+      if (/LLM|модель|gemma|ИИ/i.test(translateError)) {
+        offerLlmDownload(() => doTranslate(lang, langName));
+      } else {
+        showEnhanceStatus(`⚠ Перевод не выполнен (${translateError})`);
+      }
+    } else {
+      // отменено пользователем — просто вернуть кнопку
+      syncEnhanceButton();
+      syncTranslateButton();
+    }
+  }
+  return ok;
+}
+
+// Прерывает идущий перевод: рвёт HTTP-запрос и сигналит серверу (llama стопает генерацию).
+async function cancelTranslate() {
+  if (!translateBusy || !taskId || !currentFileName) return;
+  translateCancelling = true;
+  if (translateAbort) translateAbort.abort();
+  try {
+    await fetch(
+      `/api/translate/cancel/${taskId}/${encodeURIComponent(currentFileName)}`,
+      { method: 'POST' }
+    );
+  } catch (e) { /* не критично — HTTP уже прерван */ }
 }
 
 async function awaitSyncAskResult() {
@@ -754,7 +1598,8 @@ async function awaitSyncAskResult() {
       fileBadges[currentFileName] = 'Черновик (Whisper)';
       if (first.text) {
         setResultText(first.text, false);
-        showEnhanceButton();
+        syncEnhanceButton();
+        syncTranslateButton();
       }
       renderFileList();
     }
@@ -816,28 +1661,43 @@ function syncFileListHeight() {
 async function init() {
   initTheme();
   syncFileListHeight();
+  connectDownloads();
+  await refreshGpu();
+  await refreshModels();
+  await refreshSettings();
+  refreshLlmStatus();
   try {
-    const gpuResp = await fetch('/api/gpu');
-    const gpu = await gpuResp.json();
-    const el = document.getElementById('gpu-status');
-    el.textContent =
-      `GPU: ${gpu.has_nvidia_gpu ? 'NVIDIA' : 'не обнаружена'} | Torch: ${gpu.cuda_available ? 'CUDA' : 'CPU'}`;
-    el.classList.toggle('off', !gpu.cuda_available);
-  } catch (_) {
-    document.getElementById('gpu-status').textContent = 'GPU: ошибка проверки';
-  }
+    const st = await (await fetch('/api/downloads/status')).json();
+    if (st.active) {
+      activeDownload = st.active;
+      showDownloadModal();
+    }
+  } catch (_) {}
+}
 
+async function refreshLlmStatus() {
   try {
     const llmResp = await fetch('/api/llm');
     const llm = await llmResp.json();
     const el = document.getElementById('llm-status');
     const engine = llm.engine ? ` (${llm.engine})` : '';
     const errBox = document.getElementById('llm-error-box');
+    const portField = document.querySelector(
+      '#settings-overlay .modal-port-row'
+    )?.closest('.modal-field');
     if (llm.llm_ok) {
+      el.classList.remove('hidden');
+      if (portField) portField.classList.remove('hidden');
       el.textContent = `LLM${engine}: ${llm.model_ok ? 'модель найдена' : 'модель не найдена'}`;
       el.classList.remove('off');
       if (errBox) errBox.classList.add('hidden');
+    } else if (!llm.model_ok) {
+      el.classList.add('hidden');
+      if (portField) portField.classList.add('hidden');
+      if (errBox) errBox.classList.add('hidden');
     } else {
+      el.classList.remove('hidden');
+      if (portField) portField.classList.remove('hidden');
       el.textContent = `LLM${engine}: не обнаружен`;
       el.classList.add('off');
       if (errBox) {
@@ -851,16 +1711,18 @@ async function init() {
   }
 }
 
-async function applyLlmPort() {
+async function applyLlmPort(portArg) {
   const input = document.getElementById('llm-port-input');
   const btn = document.getElementById('llm-port-apply');
-  const port = input ? parseInt(input.value, 10) : NaN;
+  const port = portArg || (input ? parseInt(input.value, 10) : NaN);
   if (!port || isNaN(port)) {
-    input.value = '';
-    input.placeholder = 'Введите порт 1024–65535';
+    if (input) {
+      input.value = '';
+      input.placeholder = 'Введите порт 1024–65535';
+    }
     return;
   }
-  btn.disabled = true;
+  if (btn) btn.disabled = true;
   try {
     const resp = await fetch('/api/llm/port', {
       method: 'POST',
@@ -868,20 +1730,22 @@ async function applyLlmPort() {
       body: JSON.stringify({port}),
     });
     const data = await resp.json();
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
     if (data.ok) {
       document.getElementById('llm-error-box').classList.add('hidden');
       document.getElementById('llm-status').textContent =
         `LLM (${data.engine}): запущен на порту ${data.port}`;
       document.getElementById('llm-status').classList.remove('off');
-    } else {
-      document.getElementById('llm-error-text').textContent =
-        data.error || 'Не удалось запустить LLM на этом порту.';
+      return {ok: true, port: data.port};
     }
+    document.getElementById('llm-error-text').textContent =
+      data.error || 'Не удалось запустить LLM на этом порту.';
+    return {ok: false, error: data.error};
   } catch (_) {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
     document.getElementById('llm-error-text').textContent =
       'Ошибка соединения с сервером.';
+    return {ok: false, error: 'Ошибка соединения с сервером.'};
   }
 }
 
@@ -896,6 +1760,13 @@ document.body.addEventListener('drop', e => e.preventDefault());
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    for (const id of ['launch-overlay', 'settings-overlay', 'confirm-overlay']) {
+      const m = document.getElementById(id);
+      if (m && m.style.display !== 'none') {
+        closeModal(id);
+        return;
+      }
+    }
     const help = document.getElementById('help-overlay');
     const logs = document.getElementById('logs-overlay');
     if (help.style.display !== 'none') {

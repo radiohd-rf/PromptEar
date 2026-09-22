@@ -62,7 +62,7 @@ Network — сделай запрос через UI, найди его в спи
 
 ### GET /api/gpu
 
-- [ ] Возвращает: has_nvidia_gpu, torch_cuda_installed, cuda_available, device, need_install
+- [ ] Возвращает: has_nvidia_gpu, cuda_components, cuda_available, device
 - [ ] JSON — валидный
 
 ### GET /api/ollama

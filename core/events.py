@@ -119,3 +119,29 @@ class CancelledEvent(PipelineEvent):
 @dataclass
 class SetBusyEvent(PipelineEvent):
     busy: bool
+
+
+@dataclass
+class DownloadProgressEvent(PipelineEvent):
+    """Прогресс фонового скачивания (модель/Gemma/llama.cpp).
+
+    total_mb=None — размер неизвестен (нет Content-Length).
+    """
+
+    download_id: str
+    label: str
+    pct: int
+    done_mb: float
+    total_mb: float | None = None
+    status: str = "downloading"
+
+
+@dataclass
+class DownloadDoneEvent(PipelineEvent):
+    download_id: str
+
+
+@dataclass
+class DownloadFailedEvent(PipelineEvent):
+    download_id: str
+    error: str

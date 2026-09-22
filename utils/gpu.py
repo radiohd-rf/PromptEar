@@ -1,4 +1,4 @@
-"""Определение GPU и настройка PyTorch. С кешированием detect_and_report."""
+"""Определение GPU. Детект на ctranslate2 + nvidia-smi (без torch)."""
 
 import shutil
 import subprocess
@@ -9,7 +9,7 @@ _cached_report: dict | None = None
 
 
 def has_nvidia_gpu() -> bool:
-    """Проверяет наличие NVIDIA GPU через nvidia-smi или wmic."""
+    """Проверяет наличие NVIDIA GPU через nvidia-smi (или wmic)."""
     nvidia_smi = shutil.which("nvidia-smi")
     if nvidia_smi:
         try:
@@ -37,37 +37,18 @@ def has_nvidia_gpu() -> bool:
         return False
 
 
-def get_torch_device() -> str:
-    """Возвращает 'cuda' или 'cpu'."""
+def ctranslate2_cuda_devices() -> int:
+    """Количество видеокарт, доступных ctranslate2 (0 — CUDA недоступна)."""
     try:
-        import torch
+        import ctranslate2
 
-        if torch.cuda.is_available():
-            return "cuda"
-    except ImportError:
-        pass
-    return "cpu"
-
-
-def torch_has_cuda() -> bool:
-    """Проверяет, установлен ли torch с поддержкой CUDA."""
-    try:
-        import torch
-
-        return torch.version.cuda is not None
-    except (ImportError, AttributeError):
-        return False
-
-
-def get_install_command() -> str:
-    """Возвращает команду установки torch."""
-    if has_nvidia_gpu():
-        return "pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126"
-    return "pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu"
+        return int(ctranslate2.get_cuda_device_count())
+    except Exception:
+        return 0
 
 
 def clear_gpu_cache() -> None:
-    """Сбрасывает кеш detect_and_report (для тестов)."""
+    """Сбрасывает кеш detect_and_report."""
     global _cached_report
     _cached_report = None
 
@@ -79,14 +60,12 @@ def detect_and_report() -> dict:
         return _cached_report
 
     gpu = has_nvidia_gpu()
-    torch_cuda = torch_has_cuda()
-    cuda_available = get_torch_device() == "cuda"
+    ct2_cuda = ctranslate2_cuda_devices() > 0
 
     _cached_report = {
         "has_nvidia_gpu": gpu,
-        "torch_cuda_installed": torch_cuda,
-        "cuda_available": cuda_available,
-        "device": "cuda" if cuda_available else "cpu",
-        "need_install": gpu and not torch_cuda,
+        "cuda_components": ct2_cuda,
+        "cuda_available": ct2_cuda,
+        "device": "cuda" if ct2_cuda else "cpu",
     }
     return _cached_report

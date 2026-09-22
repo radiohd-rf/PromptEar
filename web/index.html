@@ -13,13 +13,16 @@
     <h1>PromptEar</h1>
     <span id="subtitle">транскрибация аудио</span>
     <div id="run-area">
-      <button class="icon-btn" id="open-output-btn" onclick="openOutputFolder()" title="Открыть папку с результатами" aria-label="Открыть папку с результатами">
+      <button class="icon-btn line-icon" id="settings-btn" onclick="openSettingsModal()" title="Настройки" aria-label="Настройки">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+      <button class="icon-btn line-icon" id="open-output-btn" onclick="openOutputFolder()" title="Открыть папку с результатами" aria-label="Открыть папку с результатами">
         <svg viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z"/></svg>
       </button>
       <div id="thinking-spinner" class="spinner" style="display:none"></div>
-      <button id="run-btn" onclick="runPipeline()">
-        <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+      <button id="run-btn" onclick="openLaunchModal()">
         Запуск
+        <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
       </button>
       <button id="cancel-btn" style="display:none" onclick="cancelPipeline()">Отмена</button>
     </div>
@@ -43,24 +46,6 @@
         </div>
 
         <div id="settings">
-          <div class="select-row">
-            <label>Формат:
-              <select id="output-format">
-                <option value="docx" selected>DOCX</option>
-                <option value="txt">TXT</option>
-                <option value="md">MD</option>
-                <option value="srt">SRT</option>
-                <option value="vtt">VTT</option>
-              </select>
-            </label>
-            <label>Обработка:
-              <select id="enhance-mode">
-                <option value="auto" selected>Авто</option>
-                <option value="ask">Спросить</option>
-                <option value="none">Без</option>
-              </select>
-            </label>
-          </div>
           <textarea id="context-prompt" placeholder="Контекст (тема, имена, термины)" rows="2"></textarea>
         </div>
       </div>
@@ -69,10 +54,20 @@
       <div id="right-area">
         <div id="live-container">
           <div class="live-header">
-            <h3>Лайв-трансляция</h3>
-            <button id="enhance-btn" style="display:none" onclick="enhanceDraft()">
-              <svg viewBox="0 0 24 24"><path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7zM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/></svg>
-              Улучшить с ИИ
+            <h3>Документ</h3>
+            <button id="enhance-btn" style="display:none" onclick="onEnhanceClick()">
+              <svg id="enhance-icon" viewBox="0 0 24 24"><path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7zM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/></svg>
+              <span id="enhance-label">Улучшить с ИИ</span>
+              <span id="enhance-spinner" class="spinner" style="display:none"></span>
+            </button>
+            <span id="enhance-status" style="display:none"></span>
+            <button id="translate-btn" style="display:none" onclick="onTranslateClick()">
+              <svg id="translate-icon" viewBox="0 0 24 24"><path d="M12.87 15.07 10.33 12.6l.04-.03a21.9 21.9 0 0 0 2.8-5.57H17V5H10V2H8v3H1v1.5h10.35a20 20 0 0 1-2.2 4.4 19.7 19.7 0 0 1-1.9-3.4H5.6a17 17 0 0 0 2.1 4.45L3.3 17l1 1.5 4.4-4.44 3 3zM19 20l-1.5-4h-3.2L13 20h1.9l.7-2h3.1l.7 2z"/></svg>
+              <span id="translate-label">Перевести</span>
+              <span id="translate-spinner" class="spinner" style="display:none"></span>
+            </button>
+            <button id="translate-reset-btn" style="display:none" onclick="resetTranslation()" title="Вернуть оригинал (исходный язык)" aria-label="Вернуть оригинал">
+              <svg viewBox="0 0 24 24"><path d="M6.5 10h11l-3.5-3.5L15 5l6 6-6 6-1-1.5L17.5 12h-11v3a1 1 0 0 1-2 0v-4a1 1 0 0 1 1-1z"/></svg>
             </button>
             <div class="live-actions">
               <button id="copy-btn" onclick="copyResult()" title="Копировать текст" aria-label="Копировать текст">
@@ -108,10 +103,12 @@
         <h3><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM6 20V4h7v5h5v11z"/></svg> Контекст (необязательно)</h3>
         <p>Напишите тему разговора, имена людей или сложные термины — программа распознает их точнее.</p>
         <h3><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.63-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61zM12 15.6A3.61 3.61 0 0 1 8.4 12c0-1.98 1.62-3.6 3.6-3.6s3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg> Настройки</h3>
-        <p><b>Формат</b> — DOCX/TXT/MD/SRT/VTT. <b>Обработка</b> — «Авто» (ИИ сразу), «Спросить» (кнопка улучшения), «Без» (только черновик).</p>
+        <p><b>Формат</b> — DOCX/TXT/MD/SRT/VTT. <b>Обработка</b> — «С обработкой» (ИИ улучшает сразу), «Без» (только черновик; кнопку «Улучшить с ИИ» можно нажать в любой момент).</p>
         <h3><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg> Что происходит после нажатия «Запуск»</h3>
-        <p>Программа по очереди: 1) подготовит звук, 2) распознает речь через Whisper, 3) улучшит текст через LLM (видно в прямом эфире), 4) сохранит результат.</p>
-        <h3><svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11z"/></svg> Копирование</h3>
+        <p>Кнопка «Запуск» открывает окно с параметрами (формат, тайм-коды, ИИ, модель, GPU). После подтверждения программа по очереди: 1) подготовит звук, 2) распознает речь через Whisper, 3) улучшит текст через LLM (видно в прямом эфире), 4) сохранит результат.</p>
+        <h3><svg viewBox="0 0 24 24"><path d="M12 3l1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7z"/></svg> Модели и ИИ</h3>
+        <p>Модель распознавания и модель ИИ докачиваются из интернета при первом использовании (виден прогресс). GPU использует NVIDIA-видеокарту, если установлены CUDA-компоненты.</p>
+        <h3><svg viewBox="0 0 24 24"><path d="m9 15 5-5m-5 9a6 6 0 1 0 0-12h3a6 6 0 1 0 0 12z"/></svg> Копирование</h3>
         <p>Кнопка копирования в правом верхнем углу окна результата копирует текст в любой момент — даже во время транскрибации.</p>
         <h3><svg viewBox="0 0 24 24"><path d="m6 6 8.5 6L6 18zM16 6h2v12h-2z"/></svg> Пропустить</h3>
         <p>Кнопка пропуска останавливает обработку текущего файла и переходит к следующему (или завершает). Частичный черновик сохраняется.</p>
@@ -121,6 +118,186 @@
         <p>В папке <code>output/</code> рядом с программой. Кнопка «Открыть папку» откроет её.</p>
         <h3><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-6h2zm0-8h-2V7h2z"/></svg> Статус-бар</h3>
         <p>Снизу показано, работает ли программа на видеокарте (GPU) и запущен ли LLM-движок с моделью.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Launch modal (параметры запуска) -->
+  <div id="launch-overlay" class="modal-overlay" style="display:none">
+    <div class="modal-box launch-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Параметры обработки</h2>
+        <button class="icon-btn modal-close" onclick="closeLaunchModal()" aria-label="Закрыть">
+          <svg viewBox="0 0 24 24"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label>Формат</label>
+          <select data-field="format">
+            <option value="docx">DOCX</option>
+            <option value="txt">TXT</option>
+            <option value="md">MD</option>
+            <option value="srt">SRT</option>
+            <option value="vtt">VTT</option>
+          </select>
+          <p class="modal-hint" id="launch-format-hint"></p>
+        </div>
+        <label class="modal-checkbox"><input type="checkbox" data-field="timestamps"> Тайм-коды [MM:SS]</label>
+        <p class="modal-hint">Отметка времени в начале каждого фрагмента текста.</p>
+        <label class="modal-checkbox"><input type="checkbox" data-field="ai"> Обработать с ИИ</label>
+        <p class="modal-hint">Прогнать распознанный текст через ИИ-модель (Gemma) для чистоты и стиля.</p>
+        <div class="modal-field">
+          <label>Модель распознавания</label>
+          <select data-field="model"></select>
+        </div>
+        <p class="modal-hint">Чем крупнее модель, тем точнее распознавание и дольше обработка. Неустановленные модели скачаются автоматически.</p>
+        <label class="modal-checkbox"><input type="checkbox" data-field="gpu"> <span data-field="gpu-label">Использовать GPU</span></label>
+        <p class="modal-hint">Распознавание ускоряется только на видеокарте NVIDIA. На AMD и без видеокарты — процессор. Смена требует перезапуска.</p>
+      </div>
+      <div class="modal-actions">
+        <button id="launch-apply" class="btn-primary" onclick="applyAndRun()">Применить и запустить</button>
+        <button onclick="closeLaunchModal()">Отмена</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Translate modal (выбор языка перевода) -->
+  <div id="translate-overlay" class="modal-overlay" onclick="closeTranslateModal()" style="display:none">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Перевод текста</h2>
+        <button class="icon-btn modal-close" onclick="closeTranslateModal()" aria-label="Закрыть">
+          <svg viewBox="0 0 24 24"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label>Язык перевода</label>
+          <select id="translate-lang" title="Язык перевода">
+            <option value="en">English</option>
+            <option value="de">Deutsch</option>
+            <option value="fr">Français</option>
+            <option value="es">Español</option>
+            <option value="it">Italiano</option>
+            <option value="ru">Русский</option>
+            <option value="uk">Українська</option>
+            <option value="be">Беларуская</option>
+            <option value="kk">Қазақша</option>
+            <option value="uz">O'zbek</option>
+            <option value="ky">Кыргызча</option>
+            <option value="az">Azərbaycanca</option>
+            <option value="hy">Հայերեն</option>
+            <option value="ka">ქართული</option>
+            <option value="tg">Тоҷикӣ</option>
+            <option value="tk">Türkmençe</option>
+            <option value="pl">Polski</option>
+            <option value="tr">Türkçe</option>
+            <option value="zh">中文</option>
+            <option value="ja">日本語</option>
+          </select>
+          <p class="modal-hint">Перевод всего распознанного текста фрагмента.</p>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="translate-apply" class="btn-primary" onclick="translateDraft()">Перевести</button>
+        <button onclick="closeTranslateModal()">Отмена</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings modal (настройки) -->
+  <div id="settings-overlay" class="modal-overlay" style="display:none">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Настройки</h2>
+        <button class="icon-btn modal-close" onclick="closeSettingsModal()" aria-label="Закрыть">
+          <svg viewBox="0 0 24 24"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label>Формат</label>
+          <select data-field="format">
+            <option value="docx">DOCX</option>
+            <option value="txt">TXT</option>
+            <option value="md">MD</option>
+            <option value="srt">SRT</option>
+            <option value="vtt">VTT</option>
+          </select>
+          <p class="modal-hint" id="settings-format-hint"></p>
+        </div>
+        <label class="modal-checkbox"><input type="checkbox" data-field="timestamps"> Тайм-коды [MM:SS]</label>
+        <p class="modal-hint">Отметка времени в начале каждого фрагмента текста.</p>
+        <label class="modal-checkbox"><input type="checkbox" data-field="ai"> Обработать с ИИ (по умолчанию)</label>
+        <p class="modal-hint">Прогнать распознанный текст через ИИ-модель (Gemma) для чистоты и стиля.</p>
+        <div class="modal-field">
+          <label>Модель распознавания</label>
+          <select data-field="model"></select>
+        </div>
+        <p class="modal-hint">Чем крупнее модель, тем точнее распознавание и дольше обработка. Неустановленные модели скачаются автоматически.</p>
+        <label class="modal-checkbox"><input type="checkbox" data-field="gpu"> <span data-field="gpu-label">Использовать GPU</span></label>
+        <p class="modal-hint">Распознавание ускоряется только на видеокарте NVIDIA. На AMD и без видеокарты — процессор. Смена требует перезапуска.</p>
+        <div class="modal-field">
+          <label>LLM-порт</label>
+          <div class="modal-port-row">
+            <input type="number" data-field="llm-port" min="1024" max="65535" placeholder="8080-8129">
+          </div>
+        </div>
+        <p class="modal-hint">Порт локального llama-server. 8080 занят системой — используется 8081.</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-primary" onclick="saveSettingsFromModal()">Сохранить</button>
+        <button onclick="closeSettingsModal()">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Download progress modal -->
+  <div id="download-overlay" class="modal-overlay" style="display:none">
+    <div class="modal-box download-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Скачивание</h2>
+      </div>
+      <div class="modal-body">
+        <div id="dl-label" class="dl-label">Подготовка…</div>
+        <div class="progress-track"><div id="dl-bar"></div></div>
+        <div id="dl-pct" class="dl-pct"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm popup -->
+  <div id="confirm-overlay" class="modal-overlay" style="display:none">
+    <div class="modal-box confirm-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Подтверждение</h2>
+      </div>
+      <div class="modal-body"><p id="confirm-text"></p></div>
+      <div class="modal-actions">
+        <button id="confirm-yes" class="btn-primary">Да</button>
+        <button id="confirm-no">Нет</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- LLM download confirm -->
+  <div id="llm-dl-overlay" class="modal-overlay" style="display:none">
+    <div class="modal-box confirm-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Модель ИИ не установлена</h2>
+      </div>
+      <div class="modal-body">
+        <p id="llm-dl-text">Для перевода текста нужна локальная модель ИИ (Gemma). Скачать её автоматически?</p>
+        <div id="llm-dl-progress" style="display:none">
+          <div id="llm-dl-label" class="dl-label">Подготовка…</div>
+          <div class="progress-track"><div id="llm-dl-bar"></div></div>
+        </div>
+        <p id="llm-dl-error" class="dl-error" style="display:none"></p>
+      </div>
+      <div class="modal-actions">
+        <button id="llm-dl-yes" class="btn-primary" onclick="startLlmDownload()">Скачать модель</button>
+        <button id="llm-dl-cancel" onclick="cancelLlmDownload()">Отмена</button>
       </div>
     </div>
   </div>

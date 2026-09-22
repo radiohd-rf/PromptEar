@@ -1,12 +1,10 @@
-"""Установщики CUDA и LLM-движков (llama.cpp / SAGE)."""
+"""Установщики LLM-движков (llama.cpp / SAGE)."""
 
-import subprocess
-import sys
+import contextlib
 import threading
 from collections.abc import Callable
 
 from core.events import (
-    CudaInstalledEvent,
     LlmReadyEvent,
     LogEvent,
     PipelineEvent,
@@ -15,87 +13,29 @@ from core.events import (
 from processing.enhancer import BaseEnhancer
 
 
-class CudaInstaller:
-    """Установка CUDA-версии torch в виртуальном окружении."""
+class GemmaInstaller:
+    """Скачивание GGUF-модели gemma-4-E2B и запуск llama-server."""
 
     @staticmethod
-    def install(emit: Callable[[PipelineEvent], None]) -> None:
-        """Запускает установку в фоновом потоке."""
-        threading.Thread(target=CudaInstaller._install_thread, args=(emit,), daemon=True).start()
+    def download_and_start(
+        on_progress: Callable[[int, int | None], None] | None = None,
+        cancel: threading.Event | None = None,
+    ) -> bool:
+        """Скачивает GGUF по config.GGUF_URL в models/llm и поднимает llama-server.
 
-    @staticmethod
-    def _install_thread(emit: Callable[[PipelineEvent], None]) -> None:
-        python = sys.executable
-        try:
-            import torch
+        cancel — событие отмены: при установке скачивание прерывается,
+        сервер не стартует, возвращается False.
+        """
+        from processing.enhancer import LlamaCppEnhancer
 
-            if torch.cuda.is_available():
-                emit(LogEvent("CUDA torch already installed, skipping"))
-                return
-        except Exception:
-            pass
-
-        emit(LogEvent("Installing CUDA torch in venv..."))
-        emit(SetBusyEvent(True))
-
-        try:
-            emit(LogEvent("  Removing CPU torch..."))
-            subprocess.run(
-                [python, "-m", "pip", "uninstall", "-y", "torch", "torchaudio"],
-                capture_output=True, timeout=120,
-            )
-            cuda_ok = False
-            for cuda_ver in ("cu126",):
-                for attempt in range(2):
-                    if attempt > 0:
-                        emit(LogEvent(f"  Retrying {cuda_ver}..."))
-                    result = subprocess.run(
-                        [python, "-m", "pip", "install", "--quiet",
-                         "--timeout", "300", "--trusted-host",
-                         "download.pytorch.org",
-                         "--index-url", f"https://download.pytorch.org/whl/{cuda_ver}",
-                         "torch==2.11.0+cu126", "torchaudio==2.11.0+cu126"],
-                        capture_output=True, text=True, timeout=900,
-                    )
-                    if result.returncode == 0:
-                        verify = subprocess.run(
-                            [python, "-c",
-                             "import torch; print(f'torch={torch.__version__}'"
-                             " f' cuda={torch.version.cuda}'"
-                             " f' available={torch.cuda.is_available()}')"],
-                            capture_output=True, text=True, timeout=30,
-                        )
-                        if "available=True" in verify.stdout:
-                            emit(LogEvent(f"  {cuda_ver}: CUDA OK"))
-                            cuda_ok = True
-                            break
-                    else:
-                        err = (result.stderr or "").strip()[:300]
-                        emit(LogEvent(f"  {cuda_ver}: {err}" if err else f"  {cuda_ver}: failed"))
-                if cuda_ok:
-                    break
-
-            if cuda_ok:
-                emit(LogEvent("CUDA torch installed! Restarting..."))
-                emit(CudaInstalledEvent(True))
-            else:
-                emit(LogEvent("CUDA install failed, falling back to CPU..."))
-                subprocess.run(
-                    [python, "-m", "pip", "install", "--quiet", "torch", "torchaudio",
-                     "--index-url", "https://download.pytorch.org/whl/cpu"],
-                    capture_output=True, timeout=300,
-                )
-                emit(LogEvent("CPU torch installed"))
-        except Exception as exc:
-            emit(LogEvent(f"Error: {exc}"))
-            emit(LogEvent("Installing CPU torch..."))
-            subprocess.run(
-                [python, "-m", "pip", "install", "--quiet", "torch", "torchaudio",
-                 "--index-url", "https://download.pytorch.org/whl/cpu"],
-                capture_output=True, timeout=300,
-            )
-        finally:
-            emit(SetBusyEvent(False))
+        enhancer = LlamaCppEnhancer()
+        enhancer.download_model(on_progress=on_progress, cancel=cancel)
+        if cancel is not None and cancel.is_set():
+            return False
+        # модель скачана; если сервер не поднялся — LLM-error-box подскажет
+        with contextlib.suppress(Exception):
+            enhancer.start_server()
+        return True
 
 
 class LlamaCppInstaller:

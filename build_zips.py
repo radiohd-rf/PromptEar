@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Сборка двух zip-дистрибутивов: CPU и CUDA.
+"""Сборка единого CPU-дистрибутива PromptEar.
 
-Запуск: python build_zips.py [cpu] [cu126]
-По умолчанию собираются обе версии.
+Запуск: python build_zips.py
 
-Каждый zip содержит:
+Zip содержит:
   - Исходный код (web/, core/, processing/, utils/, assets/)
   - bootstrap.bat, run.bat, run.pyw, main.py, config.py, requirements.txt
-  - wheels/ — torch, torchaudio и все зависимости (pip download)
+  - wheels/ — torch (CPU), torchaudio и все зависимости (pip download)
+  - ffmpeg.exe, llama.cpp (win-cpu)
+  - Модель Whisper base (встроена в models/ct2, остальные качаются на лету)
 """
 
 import os
@@ -20,16 +21,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-VARIANTS: dict[str, str] = {
-    "cpu": "https://download.pytorch.org/whl/cpu",
-    "cu126": "https://download.pytorch.org/whl/cu126",
-}
+TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
 
 SOURCE_FILES = [
     "main.py",
     "config.py",
     "bootstrap.bat",
     "run.bat",
+    "hidden.vbs",
     "run.pyw",
     "requirements.txt",
     "launcher.cs",
@@ -52,13 +51,13 @@ PIP_PACKAGES = [
     "flask",
     "pywebview",
     "faster-whisper",
+    "nvidia-cublas-cu12",
     "Pillow",
     "python-docx",
     "requests",
 ]
 
 FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-LLAMA_GGUF = Path(r"G:\models\e2b\gemma-4-E2B-it-UD-Q4_K_XL.gguf")
 
 
 def _excluded(path: Path, rel: Path) -> bool:
@@ -68,8 +67,8 @@ def _excluded(path: Path, rel: Path) -> bool:
     return rel.suffix in EXCLUDE_SUFFIXES
 
 
-def _pip_download_torch(index_url: str, dest: Path) -> None:
-    """Скачивает torch + torchaudio с зависимостями из variant-индекса (cpu/cu126)."""
+def _pip_download_torch(dest: Path) -> None:
+    """Скачивает torch + torchaudio (CPU) с зависимостями из CPU-индекса."""
     tmpdir = str(dest.parent / "_pip_temp")
     os.makedirs(tmpdir, exist_ok=True)
     env = {**os.environ, "TEMP": tmpdir, "TMP": tmpdir}
@@ -80,17 +79,18 @@ def _pip_download_torch(index_url: str, dest: Path) -> None:
         "download",
         *TORCH_PACKAGES,
         "--index-url",
-        index_url,
+        TORCH_INDEX,
         "--trusted-host",
         "download.pytorch.org",
         "--only-binary=:all:",
         "-d",
         str(dest),
     ]
-    print(f"  pip download torch -> {dest}")
+    print(f"  pip download torch (cpu) -> {dest}")
     subprocess.run(cmd, check=True, env=env)
     whls = list(dest.glob("*.whl"))
-    print(f"  Скачано {len(whls)} wheel-файлов ({sum(f.stat().st_size for f in whls) / 1024 / 1024:.0f} MB)")
+    print(f"  Скачано {len(whls)} wheel-файлов "
+          f"({sum(f.stat().st_size for f in whls) / 1024 / 1024:.0f} MB)")
 
 
 def _pip_download_packages(dest: Path) -> None:
@@ -167,28 +167,25 @@ def _download_llama_cpp(dest: Path) -> None:
     zip_path.unlink()
 
 
-def _embed_gguf(dest: Path) -> None:
-    """Копирует gemma-4-E2B-it GGUF в dest/models/llm (если файл доступен)."""
-    llm_dir = dest / "models" / "llm"
-    target = llm_dir / LLAMA_GGUF.name
-    if target.exists():
-        print("  GGUF уже есть")
+def _embed_whisper_tiny(dest: Path) -> None:
+    """Встраивает самую лёгкую модель Whisper (base) в dest/models/ct2."""
+    from core.downloader import download_whisper_model
+
+    alias = "base"
+    target = dest / "models" / "ct2" / alias
+    if (target / "model.bin").exists():
+        print(f"  Модель {alias} уже встроена")
         return
-    if LLAMA_GGUF.exists():
-        llm_dir.mkdir(parents=True, exist_ok=True)
-        size_mb = LLAMA_GGUF.stat().st_size / 1024 / 1024
-        print(f"  Копирование GGUF ({size_mb:.0f} MB)...")
-        shutil.copy2(LLAMA_GGUF, target)
-    else:
-        print("  ⚠ GGUF gemma-4-E2B не найден — модель не встроена (скачается на лету)")
+    print(f"  Встраивание модели Whisper {alias}...")
+    target.mkdir(parents=True, exist_ok=True)
+    download_whisper_model(alias, target)
+    print(f"  Модель {alias} готова")
 
 
-def build_variant(name: str, index_url: str) -> None:
-    print(f"\n=== Сборка {name.upper()} ===")
-
-    build_dir = ROOT / f"_build_{name}"
+def build_dist() -> None:
+    build_dir = ROOT / "_build_cpu"
     wheels_dir = build_dir / "wheels"
-zip_path = ROOT / f"PromptEar-v0.13.0-{name}.zip"
+    zip_path = ROOT / "PromptEar-v0.13.0-cpu.zip"
 
     # Очистка
     if build_dir.exists():
@@ -196,8 +193,8 @@ zip_path = ROOT / f"PromptEar-v0.13.0-{name}.zip"
     build_dir.mkdir(parents=True)
     wheels_dir.mkdir()
 
-    # 1. Скачать wheels (torch из variant-индекса, остальное из PyPI)
-    _pip_download_torch(index_url, wheels_dir)
+    # 1. Скачать wheels (torch CPU из variant-индекса, остальное из PyPI)
+    _pip_download_torch(wheels_dir)
     _pip_download_packages(wheels_dir)
 
     # 2. Скопировать исходники
@@ -254,10 +251,9 @@ zip_path = ROOT / f"PromptEar-v0.13.0-{name}.zip"
     # 4. Скачать ffmpeg.exe
     _download_ffmpeg(build_dir)
 
-    # 5. Встроить llama.cpp (только CPU) и модель gemma-4-E2B
-    if name == "cpu":
-        _download_llama_cpp(build_dir)
-        _embed_gguf(build_dir)
+    # 5. Встроить llama.cpp и модель Whisper base
+    _download_llama_cpp(build_dir)
+    _embed_whisper_tiny(build_dir)
 
     # 6. Создать zip
     print(f"  Создание {zip_path.name}...")
@@ -278,12 +274,7 @@ zip_path = ROOT / f"PromptEar-v0.13.0-{name}.zip"
 
 
 def main() -> None:
-    targets = sys.argv[1:] if len(sys.argv) > 1 else list(VARIANTS.keys())
-    for name in targets:
-        if name not in VARIANTS:
-            print(f"Неизвестный вариант: {name}. Допустимые: {', '.join(VARIANTS.keys())}")
-            continue
-        build_variant(name, VARIANTS[name])
+    build_dist()
     print("\n=== Готово ===")
 
 

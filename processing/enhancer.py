@@ -11,12 +11,16 @@ import socket
 import subprocess
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Event
 
 import requests
 
 from config import (
     ENHANCER_CHUNK_SIZE,
+    GGUF_URL,
     LLAMA_DIR,
     LLAMA_RELEASE,
     LLAMA_SERVER_PORT,
@@ -42,6 +46,20 @@ PASS_LABELS = {
     "pass2": "Стиль (грамматика, согласование)",
     "pass3": "Структура (абзацы, диалоги, без воды)",
 }
+
+# Правило для промптов всех проходов, когда вход размечен таймкодами [MM:SS].
+# Метка выполняет роль якоря: её нельзя удалять/менять, при перестановке
+# фрагмента она переносится вместе с ним (Gemma уже видит примерные таймкоды
+# Whisper в каждом куске входного текста).
+TS_KEEP_RULE = (
+    "- В тексте есть метки времени [MM:SS] в начале фрагментов\n"
+    "- Каждая метка привязана к своему фрагменту и обязана сохраниться\n"
+    "- НЕ удаляй метки, НЕ меняй числа в них и НЕ добавляй новых\n"
+    "- Если переносишь фрагмент текста — переноси его вместе с меткой\n"
+    "- Метки всегда идут в порядке возрастания времени\n"
+    "- Метка стоит ТОЛЬКО в начале своего фрагмента, НЕ ставь её посреди предложения\n"
+    "- Если после метки идёт строчная буква — это не начало предложения, оставь регистр как есть\n"
+)
 
 # Фактический порт, на который реально поднялся llama-server в этом процессе.
 # Позволяет /api/llm видеть порт, выбранный авто-подбором или вручную, даже
@@ -73,8 +91,12 @@ class BaseEnhancer(ABC):
         progress_callback=None,
         cancel: Event | None = None,
         stream_callback=None,
+        timestamps: bool = False,
     ) -> str:
-        """Улучшает текст (полный режим). stream_callback(text, pass_no, chunk_no, chunk_total)."""
+        """Улучшает текст (полный режим). stream_callback(text, pass_no, chunk_no, chunk_total).
+
+        timestamps=True — во входе есть таймкод-метки [MM:SS], их нужно сохранить.
+        """
 
     @abstractmethod
     def install(self, progress_callback=None) -> bool:
@@ -83,6 +105,21 @@ class BaseEnhancer(ABC):
     @abstractmethod
     def get_engine_name(self) -> str:
         """Имя движка: 'llama' | 'sage'."""
+
+    def translate(
+        self,
+        text: str,
+        language_code: str,
+        language_name: str = "",
+        cancel: Event | None = None,
+    ) -> str:
+        """Переводит текст на указанный язык (однопроходным запросом).
+
+        По умолчанию недоступен (SAGE — корректор русского, не переводчик).
+        """
+        raise NotImplementedError(
+            f"Перевод не поддерживается движком {self.get_engine_name()}"
+        )
 
 
 class LlamaCppEnhancer(BaseEnhancer):
@@ -116,20 +153,47 @@ class LlamaCppEnhancer(BaseEnhancer):
         for p in range(LLAMA_SERVER_PORT, LLAMA_SERVER_PORT + 50):
             if p not in candidates:
                 candidates.append(p)
-        server_ok = False
-        for port in candidates:
-            try:
-                r = requests.get(f"http://127.0.0.1:{port}/health", timeout=1.5)
-                if r.status_code == 200:
-                    _llama_actual_port = port
-                    self.base_url = f"http://127.0.0.1:{port}"
-                    server_ok = True
-                    break
-            except requests.RequestException:
-                continue
-        if not server_ok:
+
+        # 1) параллельно выясняем все живые llama-порты (быстро, даже если
+        #    почти все порты заняты чужими процессами без http)
+        alive = self._health_ok_ports()
+        if not alive:
             return False, False
-        return True, LLM_MODEL_PATH.exists()
+        # 2) выбираем первый приоритетный из живых (порядок кандидатов сохранён)
+        for port in candidates:
+            if port in alive:
+                _llama_actual_port = port
+                self.base_url = f"http://127.0.0.1:{port}"
+                return True, LLM_MODEL_PATH.exists()
+        return False, False
+
+    def _health(self, port: int, timeout: float = 0.4) -> bool:
+        """Быстрая проверка: отвечает ли порт /health.
+
+        Сначала TCP-коннект с малым таймаутом (закрытый/слушающий без http
+        порт отсеивается за миллисекунды), затем HTTP-запрос на живой порт.
+        """
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+                pass
+        except OSError:
+            return False
+        try:
+            r = requests.get(f"http://127.0.0.1:{port}/health", timeout=timeout)
+            return r.status_code == 200
+        except requests.RequestException:
+            return False
+
+    def _health_ok_ports(self, timeout: float = 0.4) -> set[int]:
+        """Параллельно проверяет /health на всём диапазоне портов.
+
+        Возвращает множество портов, где llama-server жив, за время одного
+        таймаута (а не 50 × timeout), используя пул потоков.
+        """
+        ports = list(range(LLAMA_SERVER_PORT, LLAMA_SERVER_PORT + 50))
+        with ThreadPoolExecutor(max_workers=min(32, len(ports))) as pool:
+            results = pool.map(lambda p: (p, self._health(p, timeout)), ports)
+        return {p for p, ok in results if ok}
 
     # ── Одиночный проход (для обратной совместимости) ──────────────────────
 
@@ -175,6 +239,46 @@ class LlamaCppEnhancer(BaseEnhancer):
             chunks.append(" ".join(current))
         return chunks or [text]
 
+    def translate(
+        self,
+        text: str,
+        language_code: str,
+        language_name: str = "",
+        cancel: Event | None = None,
+    ) -> str:
+        """Переводит текст на указанный язык.
+
+        Однопроходный перевод (без 3-проходной системы), длинные тексты
+        дробятся на чанки по границам предложений — каждый переводится отдельно.
+        language_code — ISO-код, language_name — человекочитаемое имя языка
+        (без него некоторые модели путают коды вроде 'be'/'kk' и переводят
+        «на код», т.е. по умолчанию на английский).
+        """
+        if not text.strip():
+            return text
+        target = language_name.strip() or language_code
+        chunks = self._chunk_text(text, ENHANCER_CHUNK_SIZE)
+        translated = []
+        for chunk in chunks:
+            if cancel is not None and cancel.is_set():
+                break
+            chunk = self._protect_speakers(chunk)
+            prompt = (
+                "Ты — профессиональный переводчик.\n\n"
+                "Переведи текст на следующий язык:\n"
+                f"- язык: {target} (код '{language_code}')\n"
+                "Правила:\n"
+                "- Сохрани смысл и структуру абзацев\n"
+                "- Может быть несколько говорящих — не удаляй реплики\n"
+                "- Имена, числа, даты оставь максимально близко к оригиналу\n"
+                "- Если в тексте есть метки времени [MM:SS] — сохрани их как есть\n"
+                "- Верни только перевод, без пояснений, вступлений и комментариев\n\n"
+                f"Текст:\n{chunk}"
+            )
+            res = self._call_llm(prompt)
+            translated.append(self._restore_speakers(res.strip()))
+        return "\n\n".join(t for t in translated if t)
+
     def enhance_multi_pass(
         self,
         text: str,
@@ -182,12 +286,17 @@ class LlamaCppEnhancer(BaseEnhancer):
         progress_callback=None,
         cancel: Event | None = None,
         stream_callback=None,
+        timestamps: bool = False,
     ) -> str:
         """3-проходное улучшение: очистка → стиль → структура.
 
         Длинные тексты дробятся на чанки, каждый обрабатывается независимо.
         stream_callback(text_so_far, pass_no, chunk_no, chunk_total) вызывается
         по мере генерации каждого прохода («модель печатает»).
+
+        timestamps=True — во входе есть метки [MM:SS] (от Whisper): промпты
+        получают правило не удалять и не переставлять их, метка «прилипает»
+        к своему фрагменту даже после переструктурирования.
         """
         if not text.strip():
             return text
@@ -224,6 +333,7 @@ class LlamaCppEnhancer(BaseEnhancer):
                             topic,
                             cancel=cancel,
                             stream_callback=stream_callback,
+                            keep_timestamps=timestamps,
                         )
                     except Exception:
                         if progress_callback:
@@ -233,7 +343,7 @@ class LlamaCppEnhancer(BaseEnhancer):
                         result = chunk
                 else:
                     try:
-                        result = pass_fn(chunk, topic)
+                        result = pass_fn(chunk, topic, keep_timestamps=timestamps)
                     except Exception:
                         if progress_callback:
                             progress_callback(
@@ -358,6 +468,7 @@ class LlamaCppEnhancer(BaseEnhancer):
         topic: str,
         cancel: Event | None = None,
         stream_callback=None,
+        keep_timestamps: bool = False,
     ) -> str:
         """Проход 1: орфография, пунктуация, повторы."""
         prompt = (
@@ -375,6 +486,8 @@ class LlamaCppEnhancer(BaseEnhancer):
             "Проверь себя: количество предложений в ответе должно быть "
             "равно количеству предложений во входе."
         )
+        if keep_timestamps:
+            prompt += "\n" + TS_KEEP_RULE
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nТекст:\n{text}"
@@ -388,6 +501,7 @@ class LlamaCppEnhancer(BaseEnhancer):
         topic: str,
         cancel: Event | None = None,
         stream_callback=None,
+        keep_timestamps: bool = False,
     ) -> str:
         """Проход 2: грамматика, стиль, согласование."""
         prompt = (
@@ -406,6 +520,8 @@ class LlamaCppEnhancer(BaseEnhancer):
             "Проверь себя: количество предложений в ответе должно быть "
             "равно количеству предложений во входе."
         )
+        if keep_timestamps:
+            prompt += "\n" + TS_KEEP_RULE
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nТекст:\n{text}"
@@ -419,6 +535,7 @@ class LlamaCppEnhancer(BaseEnhancer):
         topic: str,
         cancel: Event | None = None,
         stream_callback=None,
+        keep_timestamps: bool = False,
     ) -> str:
         """Проход 3: разбивка на абзацы, оформление диалогов, чистка слов-паразитов."""
         prompt = (
@@ -438,6 +555,8 @@ class LlamaCppEnhancer(BaseEnhancer):
             "Цель: минимальные изменения. Если нечего менять в структуре — верни текст как есть.\n"
             "Верни только исправленный текст — ни слова лишнего."
         )
+        if keep_timestamps:
+            prompt += "\n" + TS_KEEP_RULE
         if topic:
             prompt += f"\nТема: {topic}"
         prompt += f"\n\nТекст:\n{text}"
@@ -462,16 +581,21 @@ class LlamaCppEnhancer(BaseEnhancer):
         """Заменяет диалоговые тире на явные метки [СПИКЕР N]:.
 
         Чтобы модель не удаляла реплики, превращаем «— текст» в «[СПИКЕР 1]: текст».
+        Учитывает строки с префиксом таймкода «[00:05] — текст».
         """
         lines = text.split("\n")
         speaker_count = 0
         result = []
         for line in lines:
             stripped = line.strip()
-            m = re.match(r"^[—–-]\s+(.+)", stripped)
+            m = re.match(
+                r"^(\[\d{1,2}:\d{2}(?::\d{2})?\]\s*)?[—–-]\s+(.+)",
+                stripped,
+            )
             if m:
                 speaker_count += 1
-                result.append(f"[СПИКЕР {speaker_count}]: {m.group(1)}")
+                prefix = m.group(1) or ""
+                result.append(f"{prefix}[СПИКЕР {speaker_count}]: {m.group(2)}")
             else:
                 result.append(line)
         return "\n".join(result)
@@ -579,13 +703,11 @@ class LlamaCppEnhancer(BaseEnhancer):
         candidates += [
             p for p in range(LLAMA_SERVER_PORT, LLAMA_SERVER_PORT + 50) if p not in candidates
         ]
+        # параллельная проверка: сначала живые, затем первый по приоритету
+        alive = self._health_ok_ports()
         for port in candidates:
-            try:
-                r = requests.get(f"http://127.0.0.1:{port}/health", timeout=2)
-                if r.status_code == 200:
-                    return port
-            except requests.RequestException:
-                continue
+            if port in alive:
+                return port
         return None
 
     def _start_server(
@@ -684,6 +806,28 @@ class LlamaCppEnhancer(BaseEnhancer):
             return candidate
         return None
 
+    def download_model(
+        self,
+        on_progress: Callable[[int, int | None], None] | None = None,
+        cancel: Event | None = None,
+    ) -> Path:
+        """Скачивает GGUF-модель по config.GGUF_URL в models/llm/. Возвращает путь.
+
+        on_progress(done_bytes, total_bytes) — прогресс скачивания
+        (total_bytes=None, если сервер не прислал Content-Length).
+        cancel — событие отмены; при установке скачивание прерывается.
+        """
+        if not GGUF_URL:
+            raise RuntimeError("URL модели ИИ (GGUF_URL) не настроен — модель недоступна")
+        from core.downloader import fetch_file
+
+        llm_dir = LLM_MODEL_PATH.parent
+        llm_dir.mkdir(parents=True, exist_ok=True)
+        if LLM_MODEL_PATH.exists():
+            return LLM_MODEL_PATH
+        fetch_file(GGUF_URL, LLM_MODEL_PATH, on_progress=on_progress, cancel=cancel)
+        return LLM_MODEL_PATH
+
 
 class SageEnhancer(BaseEnhancer):
     """Однопроходный корректор русского текста на базе FRED-T5-1.7B (SAGE).
@@ -723,6 +867,7 @@ class SageEnhancer(BaseEnhancer):
         progress_callback=None,
         cancel: Event | None = None,
         stream_callback=None,
+        timestamps: bool = False,
     ) -> str:
         """Однопроходная коррекция. Чанки ≤ SAGE_MAX_CHARS (вход T5 ≤512 токенов)."""
         if not text.strip():

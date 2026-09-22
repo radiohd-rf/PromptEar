@@ -65,13 +65,13 @@ set "PYTHON=%VENV_DIR%\Scripts\python.exe"
 :: ---------------------------------------------------------------
 echo [3/6] Updating pip...
 
-"%PYTHON%" -m pip install --upgrade pip --quiet
+"%PYTHON%" -m pip install --upgrade pip --quiet --no-cache-dir
 
 echo [4/6] Installing libraries...
 
 if exist "%APP_DIR%wheels\*.whl" (
     echo   Installing from local wheels...
-    "%PIP%" install --no-index --find-links "%APP_DIR%wheels" torch torchaudio flask pywebview faster-whisper Pillow python-docx requests --quiet || (
+    "%PIP%" install --no-index --find-links "%APP_DIR%wheels" torch torchaudio flask pywebview faster-whisper Pillow python-docx requests --quiet --no-cache-dir || (
         echo   ERROR: pip install failed.
         echo   Run manually: "%PIP%" install --no-index --find-links "%APP_DIR%wheels" torch torchaudio flask pywebview faster-whisper Pillow python-docx requests
         pause
@@ -79,14 +79,14 @@ if exist "%APP_DIR%wheels\*.whl" (
     )
 ) else (
     echo   No local wheels found, installing from PyPI...
-    "%PIP%" install torch torchaudio --index-url https://download.pytorch.org/whl/cpu --quiet || (
+    "%PIP%" install torch torchaudio --index-url https://download.pytorch.org/whl/cpu --quiet --no-cache-dir || (
         echo   Warning: torch install failed
     )
-    "%PIP%" install flask pywebview faster-whisper Pillow python-docx requests --quiet || (
+    "%PIP%" install flask pywebview faster-whisper Pillow python-docx requests --quiet --no-cache-dir || (
         echo   Warning: some packages failed to install
     )
 )
-"%PIP%" install transformers huggingface-hub --quiet
+"%PIP%" install transformers huggingface-hub --quiet --no-cache-dir
 if %errorlevel% neq 0 (
     echo   Warning: transformers not installed (SAGE engine disabled).
 )
@@ -143,12 +143,11 @@ if exist "%APP_DIR%llama\llama-server.exe" (
 )
 
 :: Check model
-echo   Checking model gemma-4-E2B...
-if exist "%APP_DIR%models\llm\gemma-4-E2B-it-UD-Q4_K_XL.gguf" (
-    echo   Model found
+echo   Checking whisper model...
+if exist "%APP_DIR%models\ct2\tiny\model.bin" (
+    echo   Whisper tiny found
 ) else (
-    echo   Model gemma-4-E2B not found.
-    echo   Put the GGUF into models\llm\ or run it later from the app.
+    echo   Whisper tiny not embedded — will be downloaded on first run.
 )
 
 :: ---------------------------------------------------------------
@@ -159,10 +158,11 @@ echo === Setup complete! ===
 echo.
 echo Virtual env: %VENV_DIR%
 echo LLM engine:  llama.cpp (llama-server)
-echo Model:       gemma-4-E2B-it (models\llm)
+echo Whisper:     tiny (embedded), others download on demand
 echo.
 echo Run: run.bat
 echo.
+echo Model AI and CUDA components download from the app if needed.
 echo.
 echo Press any key to exit...
 pause >nul
