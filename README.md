@@ -38,7 +38,7 @@
 
 ## Быстрый старт
 
-1. Скачать `PromptEar-v0.16.1.zip` со страницы [релизов](https://github.com/radiohd-rf/PromptEar/releases)
+1. Скачать `PromptEar-v0.16.2.zip` со страницы [релизов](https://github.com/radiohd-rf/PromptEar/releases)
 2. Распаковать в любую папку
 3. Запустить `Запустить PromptEar.exe`
 4. Дождаться установки (bootstrap — 1 раз)
