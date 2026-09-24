@@ -451,17 +451,25 @@ async function refreshGpu() {
     const el = document.getElementById('gpu-status');
     el.classList.remove('off');
     el.classList.add('red');
-    el.textContent = 'GPU: ошибка проверки';
+    el.textContent = 'ГП: ошибка проверки';
+    el.title = 'Не удалось проверить видеокарту. Обработка идёт на процессоре.';
   }
 }
 
 function refreshGpuStatusUI() {
   const el = document.getElementById('gpu-status');
-  if (!gpuReport) { el.textContent = 'GPU: …'; return; }
+  if (!gpuReport) {
+    el.className = '';
+    el.textContent = 'ГП: …';
+    el.title = 'Проверка видеокарты…';
+    return;
+  }
   const onGpu = !!appSettings.use_gpu && !!gpuReport.cuda_available;
-  el.textContent = onGpu ? 'Используется GPU' : 'Используется CPU';
-  el.classList.toggle('off', !onGpu);
-  el.classList.remove('red');
+  el.className = onGpu ? 'gpu' : 'cpu';
+  el.textContent = onGpu ? 'Используется ГП' : 'Используется ЦП';
+  el.title = onGpu
+    ? 'Распознавание речи выполняется на видеокарте NVIDIA.'
+    : 'Распознавание речи выполняется на процессоре. Включите «Использовать GPU» в настройках, если есть видеокарта NVIDIA.';
 }
 
 async function refreshModels() {
@@ -644,6 +652,7 @@ function removeFile(idx) {
   delete fileTranslations[name];
   delete fileChecked[name];
   files.splice(idx, 1);
+  const wasCurrent = currentFileName === name;
   if (currentFileName === name) currentFileName = null;
   if (userPinnedFile === name) userPinnedFile = null;
   if (liveFile === name) liveFile = null;
@@ -655,6 +664,14 @@ function removeFile(idx) {
     document.getElementById('skip-btn').style.display = '';
   } else {
     document.getElementById('skip-btn').style.display = 'none';
+    // удалён файл, который был показан в окне документа, и показывать больше нечего
+    if (wasCurrent) {
+      setResultText('', false);
+      hideEnhanceStatus();
+      syncEnhanceButton();
+      syncTranslateButton();
+      syncResultActions();
+    }
   }
 }
 
@@ -1185,11 +1202,48 @@ function finish() {
 /* ── Help modal ─────────────────────────────────────────── */
 
 function openHelp() {
+  const check = document.getElementById('help-never-check');
+  if (check) check.checked = helpSeen();
   document.getElementById('help-overlay').style.display = 'flex';
 }
 
 function closeHelp() {
+  const check = document.getElementById('help-never-check');
+  if (check && check.checked) {
+    saveUiFlags(true, true);
+  }
   document.getElementById('help-overlay').style.display = 'none';
+}
+
+/* ── Приветствие нового пользователя ───────────────────────
+   При первом запуске показываем welcome-модалку, при закрытии
+   переходим к инструкции. Флаги «не показывать» хранятся на
+   сервере (settings.json): UI открывается на случайном порту
+   127.0.0.1:<N>, origin меняется при каждом рестарте, и
+   localStorage привязанный к origin терялся. */
+function welcomeSeen() { return !!appSettings.ui_welcome_seen; }
+function helpSeen() { return !!appSettings.ui_help_seen; }
+
+function saveUiFlags(welcomeSeen, helpSeen) {
+  appSettings.ui_welcome_seen = welcomeSeen;
+  appSettings.ui_help_seen = helpSeen;
+  fetch('/api/settings', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ui_welcome_seen: welcomeSeen, ui_help_seen: helpSeen}),
+  }).catch(() => {});
+}
+
+function showWelcomeIfNeeded() {
+  if (!welcomeSeen()) {
+    document.getElementById('welcome-overlay').style.display = 'flex';
+  }
+}
+
+function dismissWelcome() {
+  saveUiFlags(true, helpSeen());
+  document.getElementById('welcome-overlay').style.display = 'none';
+  if (!helpSeen()) openHelp();
 }
 
 /* ── Отображение текста в лайве ──
@@ -1742,6 +1796,7 @@ function requestRestart() {
     const st = await (await fetch('/api/startup', {cache: 'no-store'})).json();
     if (st && st.open_settings) openSettingsModal();
   } catch (_) {}
+  showWelcomeIfNeeded();
 }
 
 async function refreshLlmStatus() {
@@ -1749,49 +1804,45 @@ async function refreshLlmStatus() {
     const llmResp = await fetch('/api/llm');
     const llm = await llmResp.json();
     const el = document.getElementById('llm-status');
-    const engine = llm.engine ? ` (${llm.engine})` : '';
     const errBox = document.getElementById('llm-error-box');
     const portField = document.querySelector(
       '#settings-overlay .modal-port-row'
     )?.closest('.modal-field');
+    el.className = '';
+    el.classList.remove('hidden');
+    if (portField) portField.classList.remove('hidden');
+    if (errBox) errBox.classList.add('hidden');
     if (llm.llm_ok && llm.model_ok) {
-      el.classList.remove('hidden');
-      if (portField) portField.classList.remove('hidden');
-      el.textContent = `LLM${engine}: работает · порт ${llm.port || '—'}`;
-      el.classList.remove('off');
-      if (errBox) errBox.classList.add('hidden');
-    } else if (!llm.model_ok) {
-      el.classList.add('hidden');
-      if (portField) portField.classList.add('hidden');
-      if (errBox) errBox.classList.add('hidden');
+      el.textContent = 'ИИ Активен';
+      el.title = 'Движок запущен, ИИ-модель скачана и работает. Улучшение текста и перевод доступны.';
+    } else if (llm.model_ok && llm.port_ok) {
+      el.classList.add('warn');
+      el.textContent = 'ИИ Спит';
+      el.title = 'Модель установлена, движок не запущен, но порт свободен — включится сам при первом «Улучшить с ИИ» или «Перевести».';
     } else {
-      el.classList.remove('hidden');
-      if (portField) portField.classList.remove('hidden');
-      el.textContent = `LLM${engine}: не запущен (модель установлена)`;
-      el.classList.add('off');
-      if (errBox) {
-        document.getElementById('llm-error-text').textContent =
-          llm.error || 'Порт по умолчанию занят или движок не запущен.';
-        errBox.classList.remove('hidden');
-      }
+      el.classList.add('red');
+      el.textContent = 'ИИ не доступен';
+      el.title = 'Движок ИИ не запущен: порт занят или модель не установлена.';
+      if (errBox) errBox.classList.remove('hidden');
+      document.getElementById('llm-error-text').textContent =
+        llm.error ||
+        (llm.model_ok
+          ? 'Свободный порт для движка не найден — укажите порт в настройках.'
+          : 'ИИ-модель не установлена.');
     }
   } catch (_) {
-    document.getElementById('llm-status').textContent = 'LLM: ошибка';
+    const el = document.getElementById('llm-status');
+    el.className = '';
+    el.classList.remove('hidden');
+    el.classList.add('red');
+    el.textContent = 'ИИ не доступен';
+    el.title = 'Не удалось получить статус ИИ. Проверьте подключение к серверу.';
   }
 }
 
 async function applyLlmPort(portArg) {
-  const input = document.getElementById('llm-port-input');
-  const btn = document.getElementById('llm-port-apply');
-  const port = portArg || (input ? parseInt(input.value, 10) : NaN);
-  if (!port || isNaN(port)) {
-    if (input) {
-      input.value = '';
-      input.placeholder = 'Введите порт 1024–65535';
-    }
-    return;
-  }
-  if (btn) btn.disabled = true;
+  const port = parseInt(portArg, 10);
+  if (!port || isNaN(port)) return;
   try {
     const resp = await fetch('/api/llm/port', {
       method: 'POST',
@@ -1799,23 +1850,22 @@ async function applyLlmPort(portArg) {
       body: JSON.stringify({port}),
     });
     const data = await resp.json();
-    if (btn) btn.disabled = false;
     if (data.ok) {
       document.getElementById('llm-error-box').classList.add('hidden');
-      document.getElementById('llm-status').classList.remove('off');
-      document.getElementById('llm-status').textContent =
-        `LLM (${data.engine}): работает · порт ${data.port}`;
-      addLog(`✅ LLM работает на порту ${data.port}`);
+      document.getElementById('llm-status').className = '';
+      document.getElementById('llm-status').textContent = 'ИИ Активен';
+      document.getElementById('llm-status').title =
+        'Движок запущен, ИИ-модель скачана и работает. Улучшение текста и перевод доступны.';
+      addLog(`✅ ИИ работает на порту ${data.port}`);
       refreshLlmStatus();
       return {ok: true, port: data.port};
     }
     document.getElementById('llm-error-text').textContent =
-      data.error || 'Не удалось запустить LLM на этом порту.';
+      data.error || 'Не удалось запустить ИИ на этом порту.';
     document.getElementById('llm-error-box').classList.remove('hidden');
-    addLog(`⚠ LLM: ${data.error || 'не удалось запустить'}`);
+    addLog(`⚠ ИИ: ${data.error || 'не удалось запустить'}`);
     return {ok: false, error: data.error};
   } catch (_) {
-    if (btn) btn.disabled = false;
     document.getElementById('llm-error-text').textContent =
       'Ошибка соединения с сервером.';
     document.getElementById('llm-error-box').classList.remove('hidden');
@@ -1823,9 +1873,19 @@ async function applyLlmPort(portArg) {
   }
 }
 
-document.addEventListener('DOMContentLoaded', init);
+// Кнопка «Сменить порт в настройках» в подвале при «ИИ не готов»:
+// открывает настройки и фокусирует поле LLM-порта.
+function openSettingsPort() {
+  openSettingsModal();
+  setTimeout(() => {
+    const portInput = document.querySelector(
+      '#settings-overlay [data-field="llm-port"]'
+    );
+    if (portInput) { portInput.focus(); portInput.select(); }
+  }, 100);
+}
 
-document.getElementById('llm-port-apply')?.addEventListener('click', applyLlmPort);
+document.addEventListener('DOMContentLoaded', init);
 
 // Подвал сам обновляет статус LLM: движок мог стартовать/упасть без действий
 // пользователя — чтобы предупреждение не висело вечно и не вводило в заблуждение.
@@ -1843,9 +1903,12 @@ document.addEventListener('keydown', (e) => {
         return;
       }
     }
+    const welcome = document.getElementById('welcome-overlay');
     const help = document.getElementById('help-overlay');
     const logs = document.getElementById('logs-overlay');
-    if (help.style.display !== 'none') {
+    if (welcome.style.display !== 'none') {
+      dismissWelcome();
+    } else if (help.style.display !== 'none') {
       closeHelp();
     } else if (logs.style.display !== 'none') {
       closeLogs();

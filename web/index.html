@@ -66,22 +66,8 @@
       <div id="right-area">
         <div id="live-container">
           <div class="live-header">
-            <h3>Документ</h3>
-            <div class="live-tools">
-              <button id="enhance-btn" style="display:none" onclick="onEnhanceClick()">
-                <svg id="enhance-icon" viewBox="0 0 24 24"><path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7zM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/></svg>
-                <span id="enhance-label">Улучшить с ИИ</span>
-                <span id="enhance-spinner" class="spinner" style="display:none"></span>
-              </button>
-              <span id="enhance-status" style="display:none"></span>
-              <button id="translate-btn" style="display:none" onclick="onTranslateClick()">
-                <svg id="translate-icon" viewBox="0 0 24 24"><path d="M12.87 15.07 10.33 12.6l.04-.03a21.9 21.9 0 0 0 2.8-5.57H17V5H10V2H8v3H1v1.5h10.35a20 20 0 0 1-2.2 4.4 19.7 19.7 0 0 1-1.9-3.4H5.6a17 17 0 0 0 2.1 4.45L3.3 17l1 1.5 4.4-4.44 3 3zM19 20l-1.5-4h-3.2L13 20h1.9l.7-2h3.1l.7 2z"/></svg>
-                <span id="translate-label">Перевести</span>
-                <span id="translate-spinner" class="spinner" style="display:none"></span>
-              </button>
-              <button id="translate-reset-btn" style="display:none" onclick="resetTranslation()" title="Вернуть оригинал (исходный язык)" aria-label="Вернуть оригинал">
-                <svg viewBox="0 0 24 24"><path d="M6.5 10h11l-3.5-3.5L15 5l6 6-6 6-1-1.5L17.5 12h-11v3a1 1 0 0 1-2 0v-4a1 1 0 0 1 1-1z"/></svg>
-              </button>
+            <div class="live-title-row">
+              <h3>Документ</h3>
               <div class="live-actions">
                 <button id="copy-btn" style="display:none" onclick="copyResult()" title="Копировать текст" aria-label="Копировать текст">
                   <svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11z"/></svg>
@@ -94,6 +80,22 @@
                 </button>
               </div>
             </div>
+            <div class="live-tools">
+              <button id="enhance-btn" style="display:none" onclick="onEnhanceClick()">
+                <svg id="enhance-icon" viewBox="0 0 24 24"><path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7zM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/></svg>
+                <span id="enhance-spinner" class="spinner" style="display:none"></span>
+                <span id="enhance-label">Улучшить с ИИ</span>
+              </button>
+              <span id="enhance-status" style="display:none"></span>
+              <button id="translate-btn" style="display:none" onclick="onTranslateClick()">
+                <svg id="translate-icon" viewBox="0 0 24 24"><path d="M12.87 15.07 10.33 12.6l.04-.03a21.9 21.9 0 0 0 2.8-5.57H17V5H10V2H8v3H1v1.5h10.35a20 20 0 0 1-2.2 4.4 19.7 19.7 0 0 1-1.9-3.4H5.6a17 17 0 0 0 2.1 4.45L3.3 17l1 1.5 4.4-4.44 3 3zM19 20l-1.5-4h-3.2L13 20h1.9l.7-2h3.1l.7 2z"/></svg>
+                <span id="translate-spinner" class="spinner" style="display:none"></span>
+                <span id="translate-label">Перевести</span>
+              </button>
+              <button id="translate-reset-btn" style="display:none" onclick="resetTranslation()" title="Вернуть оригинал (исходный язык)" aria-label="Вернуть оригинал">
+                <svg viewBox="0 0 24 24"><path d="M6.5 10h11l-3.5-3.5L15 5l6 6-6 6-1-1.5L17.5 12h-11v3a1 1 0 0 1-2 0v-4a1 1 0 0 1 1-1z"/></svg>
+              </button>
+            </div>
           </div>
           <div id="enhance-progress" style="display:none">
             <div class="progress-track"><div id="enhance-progress-bar"></div></div>
@@ -104,6 +106,22 @@
       </div>
     </div>
   </main>
+
+  <!-- Welcome modal (новый пользователь) -->
+  <div id="welcome-overlay" class="modal-overlay" style="display:none">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Добро пожаловать в PromptEar!</h2>
+      </div>
+      <div class="modal-body">
+        <p>Программа превращает аудио и видео в готовые текстовые документы. Перетащите файлы в окно, нажмите «Запуск» — и получите расшифровку, которую можно улучшить с помощью ИИ.</p>
+        <p>Сейчас покажу краткую инструкцию.</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-primary" onclick="dismissWelcome()">Начать работу</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Help modal -->
   <div id="help-overlay" class="modal-overlay" onclick="closeHelp()" style="display:none">
@@ -136,7 +154,13 @@
         <h3><svg viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z"/></svg> Где найти результат</h3>
         <p>В папке <code>output/</code> рядом с программой. Кнопка «Открыть папку» откроет её.</p>
         <h3><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-6h2zm0-8h-2V7h2z"/></svg> Статус-бар</h3>
-        <p>Снизу показано, работает ли программа на видеокарте (GPU) и запущен ли LLM-движок с моделью.</p>
+        <p>Внизу: «Используется ЦП»/«Используется ГП» — чем распознаётся речь; статус ИИ: «Активен» (зелёный) — движок и модель работают, «Спит» (жёлтый) — модель есть, движок включится сам, «не доступен» (красный) — порт занят или модель не установлена.</p>
+      </div>
+      <div class="modal-actions modal-actions-left">
+        <label class="modal-checkbox" style="margin:0">
+          <input type="checkbox" id="help-never-check"> Не показывать при старте
+        </label>
+        <button class="btn-primary" style="margin-left:auto" onclick="closeHelp()">Продолжить</button>
       </div>
     </div>
   </div>
@@ -340,14 +364,11 @@
   </div>
 
   <footer>
-    <span id="gpu-status"></span>
-    <span id="llm-status"></span>
+    <span id="gpu-status" title="Проверка видеокарты…"></span>
+    <span id="llm-status" title="Проверка ИИ-модели…"></span>
     <div id="llm-error-box" class="hidden">
       <span id="llm-error-text"></span>
-      <span class="llm-port-field">
-        <input type="number" id="llm-port-input" min="1024" max="65535" placeholder="Порт 1024-65535, напр. 33333">
-        <button id="llm-port-apply">Применить</button>
-      </span>
+      <button id="llm-open-settings-btn" onclick="openSettingsPort()">Сменить порт в настройках</button>
     </div>
     <div id="footer-actions">
       <button id="logs-btn" onclick="toggleLogs()" title="Логи" aria-label="Логи">

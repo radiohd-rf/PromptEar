@@ -77,6 +77,18 @@ def get_llm_error() -> str | None:
     return _llama_last_error
 
 
+def llama_port_available() -> bool:
+    """Есть ли свободный порт, на который llama-server сможет подняться.
+
+    Нужен статусу «ИИ Спит»: движок не запущен сейчас, но умеет стартовать
+    сам — значит проблем нет, просто к нему пока не обращались.
+    """
+    try:
+        return LlamaCppEnhancer()._pick_port() is not None
+    except Exception:
+        return False
+
+
 def stop_llama_server() -> None:
     """Останавливает llama-server (например, при выключении «Использовать GPU»).
 

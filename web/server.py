@@ -43,7 +43,7 @@ from core.events import (
 from core.models import AudioFile, PipelineConfig
 from core.pipeline import run_pipeline as run_pipeline_core
 from processing import enhancer as enhancer_mod
-from processing.enhancer import create_enhancer, get_llm_error
+from processing.enhancer import create_enhancer, get_llm_error, llama_port_available
 from processing.transcriber import Transcriber
 from utils.extract_audio import extract_audio
 from utils.files import (
@@ -730,6 +730,12 @@ def translate_file(task_id, filename):
     if not translated or not translated.strip():
         return jsonify({"error": "Пустой результат перевода"}), 500
 
+    # Переведённый текст сам по себе лишён меток (мы подавали в модель чистый
+    # текст). Если включены таймкоды — восстанавливаем метки [MM:SS] на абзацах,
+    # чтобы перевод в окне и в файле был размечен так же, как исходник.
+    if task.get("timestamps") and result.segments:
+        translated = ensure_timestamps(result.segments, translated)
+
     filepath = result.audio.original_path or result.audio.path
     out_dir = task.get("output_dir") or filepath.parent
     output_format = task.get("output_format", "docx")
@@ -1086,6 +1092,7 @@ def llm_check():
             {
                 "llm_ok": llm_ok,
                 "model_ok": model_ok,
+                "port_ok": True if llm_ok else llama_port_available(),
                 "engine": LLM_ENGINE,
                 "port": enhancer_mod._llama_actual_port or None,
                 "error": error,
@@ -1098,6 +1105,7 @@ def llm_check():
             {
                 "llm_ok": False,
                 "model_ok": False,
+                "port_ok": False,
                 "engine": LLM_ENGINE,
                 "port": enhancer_mod._llama_actual_port or None,
                 "error": str(exc),

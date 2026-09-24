@@ -12,6 +12,11 @@ DEFAULT_SETTINGS = {
     "timestamps": False,
     "ai_enabled": False,
     "llm_port": 8080,
+    # Гостевые флаги «не показывать приветствие/инструкцию». Храним на сервере,
+    # а не в localStorage: UI открывается на случайном порту 127.0.0.1:<N>,
+    # origin меняется при каждом рестарте и веб-хранилище обнуляется.
+    "ui_welcome_seen": False,
+    "ui_help_seen": False,
 }
 
 
