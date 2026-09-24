@@ -55,27 +55,32 @@
         <div id="live-container">
           <div class="live-header">
             <h3>Документ</h3>
-            <button id="enhance-btn" style="display:none" onclick="onEnhanceClick()">
-              <svg id="enhance-icon" viewBox="0 0 24 24"><path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7zM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/></svg>
-              <span id="enhance-label">Улучшить с ИИ</span>
-              <span id="enhance-spinner" class="spinner" style="display:none"></span>
-            </button>
-            <span id="enhance-status" style="display:none"></span>
-            <button id="translate-btn" style="display:none" onclick="onTranslateClick()">
-              <svg id="translate-icon" viewBox="0 0 24 24"><path d="M12.87 15.07 10.33 12.6l.04-.03a21.9 21.9 0 0 0 2.8-5.57H17V5H10V2H8v3H1v1.5h10.35a20 20 0 0 1-2.2 4.4 19.7 19.7 0 0 1-1.9-3.4H5.6a17 17 0 0 0 2.1 4.45L3.3 17l1 1.5 4.4-4.44 3 3zM19 20l-1.5-4h-3.2L13 20h1.9l.7-2h3.1l.7 2z"/></svg>
-              <span id="translate-label">Перевести</span>
-              <span id="translate-spinner" class="spinner" style="display:none"></span>
-            </button>
-            <button id="translate-reset-btn" style="display:none" onclick="resetTranslation()" title="Вернуть оригинал (исходный язык)" aria-label="Вернуть оригинал">
-              <svg viewBox="0 0 24 24"><path d="M6.5 10h11l-3.5-3.5L15 5l6 6-6 6-1-1.5L17.5 12h-11v3a1 1 0 0 1-2 0v-4a1 1 0 0 1 1-1z"/></svg>
-            </button>
-            <div class="live-actions">
-              <button id="copy-btn" onclick="copyResult()" title="Копировать текст" aria-label="Копировать текст">
-                <svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11z"/></svg>
+            <div class="live-tools">
+              <button id="enhance-btn" style="display:none" onclick="onEnhanceClick()">
+                <svg id="enhance-icon" viewBox="0 0 24 24"><path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7zM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/></svg>
+                <span id="enhance-label">Улучшить с ИИ</span>
+                <span id="enhance-spinner" class="spinner" style="display:none"></span>
               </button>
-              <button id="skip-btn" style="display:none" onclick="skipFile()" title="Пропустить текущий файл" aria-label="Пропустить текущий файл">
-                <svg viewBox="0 0 24 24"><path d="m6 6 8.5 6L6 18zM16 6h2v12h-2z"/></svg>
+              <span id="enhance-status" style="display:none"></span>
+              <button id="translate-btn" style="display:none" onclick="onTranslateClick()">
+                <svg id="translate-icon" viewBox="0 0 24 24"><path d="M12.87 15.07 10.33 12.6l.04-.03a21.9 21.9 0 0 0 2.8-5.57H17V5H10V2H8v3H1v1.5h10.35a20 20 0 0 1-2.2 4.4 19.7 19.7 0 0 1-1.9-3.4H5.6a17 17 0 0 0 2.1 4.45L3.3 17l1 1.5 4.4-4.44 3 3zM19 20l-1.5-4h-3.2L13 20h1.9l.7-2h3.1l.7 2z"/></svg>
+                <span id="translate-label">Перевести</span>
+                <span id="translate-spinner" class="spinner" style="display:none"></span>
               </button>
+              <button id="translate-reset-btn" style="display:none" onclick="resetTranslation()" title="Вернуть оригинал (исходный язык)" aria-label="Вернуть оригинал">
+                <svg viewBox="0 0 24 24"><path d="M6.5 10h11l-3.5-3.5L15 5l6 6-6 6-1-1.5L17.5 12h-11v3a1 1 0 0 1-2 0v-4a1 1 0 0 1 1-1z"/></svg>
+              </button>
+              <div class="live-actions">
+                <button id="copy-btn" style="display:none" onclick="copyResult()" title="Копировать текст" aria-label="Копировать текст">
+                  <svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11z"/></svg>
+                </button>
+                <button id="open-doc-btn" style="display:none" onclick="openResultDoc()" title="Открыть готовый документ в редакторе" aria-label="Открыть в редакторе">
+                  <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zm4 18H6V4h7v5h5z"/></svg>
+                </button>
+                <button id="skip-btn" style="display:none" onclick="skipFile()" title="Пропустить текущий файл" aria-label="Пропустить текущий файл">
+                  <svg viewBox="0 0 24 24"><path d="m6 6 8.5 6L6 18zM16 6h2v12h-2z"/></svg>
+                </button>
+              </div>
             </div>
           </div>
           <div id="enhance-progress" style="display:none">
@@ -148,10 +153,10 @@
         <label class="modal-checkbox"><input type="checkbox" data-field="ai"> Обработать с ИИ</label>
         <p class="modal-hint">Прогнать распознанный текст через ИИ-модель (Gemma) для чистоты и стиля.</p>
         <div class="modal-field">
-          <label>Модель распознавания</label>
+          <label>Движок распознавания</label>
           <select data-field="model"></select>
         </div>
-        <p class="modal-hint">Чем крупнее модель, тем точнее распознавание и дольше обработка. Неустановленные модели скачаются автоматически.</p>
+        <p class="modal-hint">GigaAM v3 — лучшая точность для русского (без интернета). Whisper — базовая или мощная large-v3 для иностранной речи. Неустановленные скачаются автоматически.</p>
         <label class="modal-checkbox"><input type="checkbox" data-field="gpu"> <span data-field="gpu-label">Использовать GPU</span></label>
         <p class="modal-hint">Распознавание ускоряется только на видеокарте NVIDIA. На AMD и без видеокарты — процессор. Смена требует перезапуска.</p>
       </div>
@@ -229,13 +234,16 @@
         </div>
         <label class="modal-checkbox"><input type="checkbox" data-field="timestamps"> Тайм-коды [MM:SS]</label>
         <p class="modal-hint">Отметка времени в начале каждого фрагмента текста.</p>
-        <label class="modal-checkbox"><input type="checkbox" data-field="ai"> Обработать с ИИ (по умолчанию)</label>
+        <div class="ai-check-row">
+          <label class="modal-checkbox"><input type="checkbox" data-field="ai"> Обработать с ИИ (по умолчанию)</label>
+          <button type="button" id="ai-delete-row-btn" class="mini-btn danger" onclick="deleteAiModel()">Удалить модель</button>
+        </div>
         <p class="modal-hint">Прогнать распознанный текст через ИИ-модель (Gemma) для чистоты и стиля.</p>
         <div class="modal-field">
-          <label>Модель распознавания</label>
+          <label>Движок распознавания</label>
           <select data-field="model"></select>
         </div>
-        <p class="modal-hint">Чем крупнее модель, тем точнее распознавание и дольше обработка. Неустановленные модели скачаются автоматически.</p>
+        <p class="modal-hint">GigaAM v3 — лучшая точность для русского. Whisper — базовый или мощный large-v3 для иностранной речи. Неустановленные скачаются автоматически.</p>
         <label class="modal-checkbox"><input type="checkbox" data-field="gpu"> <span data-field="gpu-label">Использовать GPU</span></label>
         <p class="modal-hint">Распознавание ускоряется только на видеокарте NVIDIA. На AMD и без видеокарты — процессор. Смена требует перезапуска.</p>
         <div class="modal-field">
@@ -333,6 +341,9 @@
   <div class="modal-box logs-box" onclick="event.stopPropagation()">
     <div class="modal-header">
       <h2>Логи</h2>
+      <button class="icon-btn modal-close" onclick="copyLogs()" title="Скопировать логи" aria-label="Скопировать логи">
+        <svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11z"/></svg>
+      </button>
       <button class="icon-btn modal-close" onclick="closeLogs()" aria-label="Закрыть">
         <svg viewBox="0 0 24 24"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>
       </button>

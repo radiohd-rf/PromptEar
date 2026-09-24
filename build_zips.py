@@ -50,6 +50,7 @@ TORCH_PACKAGES = ["torch", "torchaudio"]
 PIP_PACKAGES = [
     "flask",
     "pywebview",
+    "waitress",
     "faster-whisper",
     "nvidia-cublas-cu12",
     "Pillow",

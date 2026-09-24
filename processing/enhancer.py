@@ -1,9 +1,9 @@
-"""Улучшение текста через LLM-движок: llama.cpp (llama-server) или SAGE (T5).
+"""Улучшение текста через LLM-движок: llama.cpp (llama-server).
 
-Единый интерфейс BaseEnhancer: llama-движок сохраняет 3-проходную систему,
-SAGE — однопроходный корректор орфографии/пунктуации/заглавных.
+Единый интерфейс BaseEnhancer — 3-проходная система (очистка/стиль/структура).
 """
 
+import contextlib
 import json
 import os
 import re
@@ -14,32 +14,33 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock, Thread
 
 import requests
 
 from config import (
     ENHANCER_CHUNK_SIZE,
     GGUF_URL,
+    LLAMA_CUDA_URL,
+    LLAMA_CUDART_URL,
     LLAMA_DIR,
-    LLAMA_RELEASE,
+    LLAMA_GPU_LAYERS,
     LLAMA_SERVER_PORT,
     LLM_BASE_URL,
     LLM_CONTEXT,
-    LLM_ENGINE,
     LLM_MODEL,
     LLM_MODEL_PATH,
     LLM_NUM_PREDICT,
     LLM_RETRIES,
     LLM_TEMPERATURE,
     LLM_TIMEOUT,
+    MODEL_IDLE_CHECK_SEC,
+    MODEL_IDLE_TIMEOUT_SEC,
     MULTI_PASS_MAX_RATIO,
     MULTI_PASS_MIN_RATIO,
-    SAGE_HF_REPO,
-    SAGE_MAX_CHARS,
-    SAGE_MODEL_DIR,
 )
 from processing.topic import detect_topic
+from utils.logger import get_logger
 
 PASS_LABELS = {
     "pass1": "Очистка (орфография, пунктуация, повторы)",
@@ -76,6 +77,184 @@ def get_llm_error() -> str | None:
     return _llama_last_error
 
 
+def stop_llama_server() -> None:
+    """Останавливает llama-server (например, при выключении «Использовать GPU»).
+
+    Убитый процесс освобождает видеопамять, занятую моделью (-ngl). Модульный
+    хелпер, чтобы web/server.py не лез в статический метод класса.
+    """
+    LlamaCppEnhancer._stop_llama_server()
+
+
+def _llama_cmdline() -> str:
+    """Cmdline запущенного llama-server ('' — процесс не найден).
+
+    Нужен, чтобы отличать GPU-режим (-ngl > 0) от CPU (-ngl 0) после
+    перезапуска приложения, когда llama-server выживает: модель тогда
+    остаётся там, куда её загрузили, независимо от текущей галочки GPU.
+    """
+    try:
+        out = subprocess.run(
+            [
+                "wmic",
+                "process",
+                "where",
+                "name='llama-server.exe'",
+                "get",
+                "CommandLine",
+                "/value",
+            ],
+            capture_output=True,
+            timeout=5,
+            check=False,
+            # Без флага каждая проверка (а /api/llm опрашивается UI каждые
+            # 5 с) вспыхивает консольным окном поверх приложения.
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        ).stdout
+    except OSError:
+        return ""
+    return out.replace(b"\x00", b"").decode("ascii", "ignore")
+
+
+def _llama_gpu_mode_running() -> bool | None:
+    """Запущен ли живой llama-server с GPU-оффлоадом (-ngl > 0).
+
+    True/False — режим определён по cmdline процесса; None — процесс не найден
+    или определить не удалось. Нужно, чтобы после перезапуска приложения (когда
+    llama-server выживает) при включённом GPU не переиспользовать движок,
+    работающий в CPU-режиме (-ngl 0) — модель тогда остаётся на процессоре.
+    """
+    m = re.search(r"-ngl\s+(\d+)", _llama_cmdline())
+    if m is None:
+        return None
+    return int(m.group(1)) > 0
+
+
+# --- Гашение llama-server при простое -------------------------------------
+# Движок дорогой (3 ГБ VRAM), а висит detached вечно. Сторож раз в
+# MODEL_IDLE_CHECK_SEC смотрит: если движком реально пользовались в этой
+# сессии (есть управляемые PID), генераций в полёте нет и простой дольше
+# MODEL_IDLE_TIMEOUT_SEC — гасит процесс. Опросы /api/llm статусом
+# активностью НЕ считаются (иначе UI-пулинг каждые 5 с не давал бы уснуть).
+_llama_last_used: float | None = None  # monotonic() последнего обращения
+_llama_inflight = 0  # активных генераций — рабочий движок не гасим
+_llama_pinned = 0  # задач, которым движок понадобится (сторож не гасит)
+_llama_managed_pids: set[int] = set()  # PID, запущенные/подобранные сессией
+_llama_idle_watcher_started = False
+_llama_state_lock = Lock()
+
+
+def _touch_llama() -> None:
+    """Отметить реальное обращение к движку (сбрасывает простой)."""
+    global _llama_last_used
+    _llama_last_used = time.monotonic()
+
+
+def pin_llama_server() -> None:
+    """Запрет гашения на время задачи (auto-режим: движок понадобится в конце)."""
+    global _llama_pinned
+    _llama_pinned += 1
+    _touch_llama()
+
+
+def unpin_llama_server() -> None:
+    """Снять запрет гашения (вызывать в finally задачи)."""
+    global _llama_pinned
+    _llama_pinned = max(0, _llama_pinned - 1)
+
+
+@contextlib.contextmanager
+def _llama_call():
+    """Учёт активной генерации: сторож ждёт её завершения."""
+    global _llama_inflight
+    _llama_inflight += 1
+    _touch_llama()
+    try:
+        yield
+    finally:
+        _llama_inflight -= 1
+
+
+def _llama_pids() -> list[int]:
+    """PID всех запущенных llama-server.exe (без всплытия окна)."""
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq llama-server.exe", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    pids: list[int] = []
+    for line in out.splitlines():
+        parts = [p.strip().strip('"') for p in line.split('","')]
+        if len(parts) >= 2 and parts[0].lower() == "llama-server.exe":
+            with contextlib.suppress(ValueError):
+                pids.append(int(parts[1]))
+    return pids
+
+
+def _manage_llama_pid(pid: int | None) -> None:
+    """Взять PID под надзор сторожа простоя."""
+    global _llama_managed_pids
+    if pid is not None:
+        _llama_managed_pids.add(pid)
+
+
+def _ensure_llama_idle_watcher() -> None:
+    """Запускает сторожа простоя (один раз за процесс)."""
+    global _llama_idle_watcher_started
+    with _llama_state_lock:
+        if _llama_idle_watcher_started:
+            return
+        _llama_idle_watcher_started = True
+    Thread(target=_llama_idle_watcher, name="llama-idle", daemon=True).start()
+
+
+def _llama_idle_watcher() -> None:
+    """Фон: гасит llama-server после MODEL_IDLE_TIMEOUT_SEC простоя."""
+    while True:
+        time.sleep(MODEL_IDLE_CHECK_SEC)
+        # Сторож не должен умирать.
+        with contextlib.suppress(Exception):
+            _llama_idle_check()
+
+
+def _llama_idle_check() -> None:
+    """Одна проверка сторожа (вынесена для тестируемости)."""
+    global _llama_actual_port, _llama_managed_pids
+    if (
+        not _llama_managed_pids
+        or _llama_inflight > 0
+        or _llama_pinned > 0
+        or _llama_last_used is None
+    ):
+        return
+    if time.monotonic() - _llama_last_used < MODEL_IDLE_TIMEOUT_SEC:
+        return
+    # Чужие процессы не трогаем: гасим только свои, и только если живы.
+    alive = [p for p in _llama_managed_pids if p in _llama_pids()]
+    _llama_managed_pids = set(alive)
+    if not alive:
+        _llama_actual_port = None
+        return
+    mins = MODEL_IDLE_TIMEOUT_SEC // 60
+    for pid in alive:
+        if _llama_inflight > 0:  # генерация стартовала, пока гасили
+            return
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F"],
+            capture_output=True,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    _llama_managed_pids = set()
+    _llama_actual_port = None
+    get_logger().info(f"llama-server остановлен после {mins} мин простоя")
+
+
 class BaseEnhancer(ABC):
     """Общий интерфейс улучшения текста."""
 
@@ -104,7 +283,7 @@ class BaseEnhancer(ABC):
 
     @abstractmethod
     def get_engine_name(self) -> str:
-        """Имя движка: 'llama' | 'sage'."""
+        """Имя движка."""
 
     def translate(
         self,
@@ -115,7 +294,7 @@ class BaseEnhancer(ABC):
     ) -> str:
         """Переводит текст на указанный язык (однопроходным запросом).
 
-        По умолчанию недоступен (SAGE — корректор русского, не переводчик).
+        По умолчанию недоступен.
         """
         raise NotImplementedError(
             f"Перевод не поддерживается движком {self.get_engine_name()}"
@@ -131,11 +310,28 @@ class LlamaCppEnhancer(BaseEnhancer):
         self.port_override = port
         self.last_error: str | None = None
         self._session: requests.Session | None = None
+        # Сводку offload llama-server логируем ровно один раз за сессию (после
+        # первого успешного /health); иначе она дублировалась бы на каждый
+        # перезапуск движка.
+        self._offload_summary_logged = False
+        # Последняя сформированная сводка offload (дубль строки из app.log).
+        self._offload_summary: str = ""
 
     def _get_session(self) -> requests.Session:
         if self._session is None:
             self._session = requests.Session()
         return self._session
+
+    def _resolved_base_url(self) -> str:
+        """Реальный адрес llama-server: фактически выбранный порт важнее конфига.
+
+        Свежий enhancer (create_enhancer) не знает, что пользователь задал
+        другой порт или что движок нашёлся на свободном порту из диапазона —
+        поэтому для запросов берём _llama_actual_port, если он уже известен.
+        """
+        if _llama_actual_port is not None:
+            return f"http://127.0.0.1:{_llama_actual_port}"
+        return self.base_url
 
     def get_engine_name(self) -> str:
         return "llama"
@@ -143,11 +339,15 @@ class LlamaCppEnhancer(BaseEnhancer):
     def is_available(self) -> tuple[bool, bool]:
         """Проверяет запущен ли llama-server и есть ли GGUF-файл.
 
-        Возвращает (server_ok, model_ok). Сначала проверяется фактический порт
-        (авто-подобранный или выбранный вручную), затем сканируется диапазон
-        LLAMA_SERVER_PORT..+50 на предмет уже запущенного llama-server.
+        Возвращает (server_ok, model_ok). model_ok считается по наличию файла
+        модели НЕЗАВИСИМО от статуса сервера: файл может быть на месте, а
+        llama-server ещё не запущен (ленивый старт по запросу) — и это не
+        значит, что модель "не установлена". Сначала проверяется фактический
+        порт (авто-подобранный или выбранный вручную), затем сканируется
+        диапазон LLAMA_SERVER_PORT..+50 на предмет уже запущенного llama-server.
         """
         global _llama_actual_port
+        model_ok = LLM_MODEL_PATH.exists()
         prime = (_llama_actual_port, self.port_override, LLAMA_SERVER_PORT)
         candidates = [p for p in prime if p is not None]
         for p in range(LLAMA_SERVER_PORT, LLAMA_SERVER_PORT + 50):
@@ -158,14 +358,25 @@ class LlamaCppEnhancer(BaseEnhancer):
         #    почти все порты заняты чужими процессами без http)
         alive = self._health_ok_ports()
         if not alive:
-            return False, False
+            return False, model_ok
+        # Желаем GPU, но единственный живой llama-server крутится в CPU-режиме
+        # (-ngl 0, например пережил рестарт приложения). Такой движок считаем
+        # недоступным: вызывающий код (_ensure_llm / /api/llm/port) перезапустит
+        # его с GPU-оффлоадом, а не будет по-тихому гонять модель на процессоре.
+        want_gpu = self._use_gpu_setting() and self.cuda_build_present()
+        if want_gpu and _llama_gpu_mode_running() is False:
+            self.last_error = (
+                "llama-server работает в CPU-режиме, а включён «Использовать GPU» — "
+                "движок перезапускается"
+            )
+            return False, model_ok
         # 2) выбираем первый приоритетный из живых (порядок кандидатов сохранён)
         for port in candidates:
             if port in alive:
                 _llama_actual_port = port
                 self.base_url = f"http://127.0.0.1:{port}"
-                return True, LLM_MODEL_PATH.exists()
-        return False, False
+                return True, model_ok
+        return False, model_ok
 
     def _health(self, port: int, timeout: float = 0.4) -> bool:
         """Быстрая проверка: отвечает ли порт /health.
@@ -372,13 +583,18 @@ class LlamaCppEnhancer(BaseEnhancer):
 
         При таймауте делает повтор (фикс бага #15).
         """
+        with _llama_call():
+            return self._do_call_llm(prompt, timeout)
+
+    def _do_call_llm(self, prompt: str, timeout: int) -> str:
+        """Тело _call_llm (без учёта простоя — см. _llama_call)."""
         payload = {
             "messages": [{"role": "user", "content": prompt}],
             "temperature": LLM_TEMPERATURE,
             "max_tokens": LLM_NUM_PREDICT,
             "stream": False,
         }
-        url = f"{self.base_url}/v1/chat/completions"
+        url = f"{self._resolved_base_url()}/v1/chat/completions"
         attempts = LLM_RETRIES + 1
         last_exc: Exception | None = None
         for attempt in range(attempts):
@@ -409,13 +625,24 @@ class LlamaCppEnhancer(BaseEnhancer):
         Флаг cancel прерывает запрос: соединение закрывается, генерация обрывается.
         Возвращает полный сгенерированный текст.
         """
+        with _llama_call():
+            return self._do_call_llm_stream(prompt, on_token, cancel, timeout)
+
+    def _do_call_llm_stream(
+        self,
+        prompt: str,
+        on_token,
+        cancel: Event | None = None,
+        timeout: int = LLM_TIMEOUT,
+    ) -> str:
+        """Тело _call_llm_stream (без учёта простоя — см. _llama_call)."""
         payload = {
             "messages": [{"role": "user", "content": prompt}],
             "temperature": LLM_TEMPERATURE,
             "max_tokens": LLM_NUM_PREDICT,
             "stream": True,
         }
-        url = f"{self.base_url}/v1/chat/completions"
+        url = f"{self._resolved_base_url()}/v1/chat/completions"
         last_exc: Exception | None = None
         for attempt in range(LLM_RETRIES + 1):
             try:
@@ -607,18 +834,45 @@ class LlamaCppEnhancer(BaseEnhancer):
 
     # ── Установка ──────────────────────────────────────────────────────────
 
-    def install(self, progress_callback=None) -> bool:
-        """Скачивает llama.cpp (win-cpu), распаковывает и запускает llama-server.
+    @staticmethod
+    def _use_gpu_setting() -> bool:
+        """Уважает галочку «Использовать GPU» (core/settings)."""
+        from core import settings as settings_store
 
-        Возвращает True при успехе.
+        return bool(settings_store.load().get("use_gpu", False))
+
+    @staticmethod
+    def cuda_build_present() -> bool:
+        """Поставлена ли CUDA-сборка llama.cpp (ggml-cuda.dll)."""
+        return any(LLAMA_DIR.rglob("ggml-cuda*.dll"))
+
+    @staticmethod
+    def _stop_llama_server() -> None:
+        """Останавливает llama-server (иначе он держит DLL сборки)."""
+        subprocess.run(
+            ["taskkill", "/IM", "llama-server.exe", "/F"],
+            capture_output=True,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+    def _fetch_build(
+        self,
+        url: str,
+        label: str,
+        progress_callback=None,
+        on_download: Callable[[int, int | None], None] | None = None,
+        require_server: bool = True,
+    ) -> Path | None:
+        """Скачивает zip-сборку llama.cpp, останавливает старый сервер и
+        распаковывает сборку поверх текущей. Возвращает путь к llama-server.exe
+        (None, если require_server=False — дополняющий архив, например cudart).
+
+        on_download(done, total) — байтовый прогресс скачивания (как fetch_file).
         """
         if progress_callback:
-            progress_callback("Скачивание llama.cpp...")
+            progress_callback(f"Скачивание {label}...")
 
-        url = (
-            f"https://github.com/ggml-org/llama.cpp/releases/download/"
-            f"{LLAMA_RELEASE}/llama-{LLAMA_RELEASE}-bin-win-cpu-x64.zip"
-        )
         zip_path = LLAMA_DIR / "llama.zip"
         LLAMA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -629,10 +883,17 @@ class LlamaCppEnhancer(BaseEnhancer):
                     progress_callback(f"  Попытка {attempt}/{max_retries}...")
                 r = requests.get(url, stream=True, timeout=(15, 120))
                 r.raise_for_status()
+                total = int(r.headers.get("Content-Length") or 0) or None
+                done = 0
                 with open(zip_path, "wb") as f:
                     for chunk in r.iter_content(65536):
                         if chunk:
                             f.write(chunk)
+                            done += len(chunk)
+                            if progress_callback and total:
+                                progress_callback(f"  {done / 1e6:.0f} / {total / 1e6:.0f} МБ")
+                            if on_download:
+                                on_download(done, total)
                 break
             except requests.exceptions.ConnectionError:
                 if attempt == max_retries:
@@ -640,6 +901,10 @@ class LlamaCppEnhancer(BaseEnhancer):
                 if progress_callback:
                     progress_callback("  Сетевая ошибка, повтор через 3 сек...")
                 time.sleep(3)
+
+        # Перезаписать файлы сборки можно только после остановки llama-server
+        # (Windows держит загруженные DLL).
+        self._stop_llama_server()
 
         if progress_callback:
             progress_callback("Распаковка llama.cpp...")
@@ -649,12 +914,63 @@ class LlamaCppEnhancer(BaseEnhancer):
             zf.extractall(LLAMA_DIR)
         zip_path.unlink()
 
-        server_exe = LLAMA_DIR / "llama-server.exe"
-        if not server_exe.exists():
-            for candidate in LLAMA_DIR.rglob("llama-server.exe"):
-                server_exe = candidate
-                break
-        if not server_exe.exists():
+        server_exe = None
+        if require_server:
+            server_exe = LLAMA_DIR / "llama-server.exe"
+            if not server_exe.exists():
+                for candidate in LLAMA_DIR.rglob("llama-server.exe"):
+                    server_exe = candidate
+                    break
+            if not server_exe.exists():
+                raise RuntimeError("llama-server.exe не найден в архиве llama.cpp")
+        return server_exe
+
+    def download_cuda_build(
+        self,
+        progress_callback=None,
+        on_download: Callable[[int, int | None], None] | None = None,
+    ) -> None:
+        """Ставит CUDA-сборку llama.cpp + CUDA-рантайм (самодостаточно)."""
+        if self.cuda_build_present():
+            return
+        # 1) llama-server, ggml-cuda.dll и т.д.
+        self._fetch_build(
+            LLAMA_CUDA_URL,
+            "CUDA-сборка llama.cpp",
+            progress_callback,
+            on_download=on_download,
+        )
+        # 2) CUDA-рантайм (cudart64_13, cublas64_13, cublasLt64_13) — без него
+        #    ggml-cuda.dll не загрузится (его нет в бинарном архиве).
+        self._fetch_build(
+            LLAMA_CUDART_URL,
+            "CUDA-рантайм",
+            progress_callback,
+            on_download=on_download,
+            require_server=False,
+        )
+
+    def install(self, progress_callback=None) -> bool:
+        """Скачивает llama.cpp (cpu или cuda — зависит от «Использовать GPU»),
+        распаковывает и запускает llama-server. Возвращает True при успехе.
+        """
+        # Подбираем источник: при «Использовать GPU» ставим CUDA-сборку (CPU
+        # при установке не нужна — модель после GPU-сборки работает и на CPU
+        # через -ngl 0, а переключение вниз не качает ничего).
+        want_cuda = self._use_gpu_setting() and not self.cuda_build_present()
+        url = LLAMA_CUDA_URL if want_cuda else None
+        server_exe = None
+        if url is not None:
+            server_exe = self._fetch_build(
+                url,
+                "CUDA-сборка llama.cpp",
+                progress_callback,
+            )
+        else:
+            if progress_callback:
+                progress_callback("Используем уже установленную сборку llama.cpp")
+            server_exe = self._find_server_exe()
+        if server_exe is None:
             raise RuntimeError("llama-server.exe не найден в архиве llama.cpp")
 
         if not LLM_MODEL_PATH.exists():
@@ -722,16 +1038,32 @@ class LlamaCppEnhancer(BaseEnhancer):
         global _llama_actual_port, _llama_last_error
         self.last_error = None
         if self.is_available()[0]:
+            _touch_llama()
             return True
 
         # Если llama-server уже запущен в диапазоне портов (например, его поднял
         # пользователь вручную на 8081, пока 8080 занят httpd) — используем его,
         # а не спавним второй экземпляр с загрузкой модели в память.
+        # Исключение: желаем GPU-оффлоад, а живой движок крутится в CPU-режиме
+        # (-ngl 0, пережил рестарт приложения) — таких переиспользовать нельзя,
+        # иначе «Использовать GPU» включено, а модель снова на процессоре.
+        want_gpu = self._use_gpu_setting() and self.cuda_build_present()
         existing = self._find_running_llama(prefer_port)
         if existing is not None:
-            _llama_actual_port = existing
-            self.base_url = f"http://127.0.0.1:{existing}"
-            return True
+            if not want_gpu or _llama_gpu_mode_running() is not False:
+                _llama_actual_port = existing
+                self.base_url = f"http://127.0.0.1:{existing}"
+                # Одинокий процесс берём под надзор сторожа простоя; если
+                # серверов несколько — чей он, непонятно, не трогаем.
+                pids = _llama_pids()
+                if len(pids) == 1:
+                    _manage_llama_pid(pids[0])
+                _touch_llama()
+                _ensure_llama_idle_watcher()
+                return True
+            # CPU-движок при желаемом GPU — убиваем и стартуем заново с -ngl.
+            self._stop_llama_server()
+            time.sleep(1.0)
 
         port = self._pick_port(prefer_port)
         if port is None:
@@ -755,23 +1087,70 @@ class LlamaCppEnhancer(BaseEnhancer):
             "-c", str(LLM_CONTEXT),
             "--host", "127.0.0.1",
             "--port", str(port),
-            "--threads", str(max(1, os.cpu_count() or 4)),
         ]
-        subprocess.Popen(
-            cmd,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        if self._use_gpu_setting() and self.cuda_build_present():
+            # GPU-режим (CUDA-сборка, -ngl 99): кадры считает видеокарта, а
+            # потоки llama.cpp расходуются в основном на sampling + mmap-чтение
+            # страниц весов, которые «добиваются» на CPU. Ограничиваем их двумя —
+            # CPU падает почти вдвое при практически той же tok/s (генерация
+            # упирается в GPU, а не в процессор).
+            cmd += ["-ngl", str(LLAMA_GPU_LAYERS)]
+            cmd += ["--flash-attn", "on"]
+            llama_threads = "2"
+        else:
+            # Явный -ngl 0: с установленной CUDA-сборкой llama.cpp может сам
+            # решить выгрузить модель на GPU, что противоречит «Использовать GPU»=выкл.
+            cmd += ["-ngl", "0"]
+            # CPU-режим: модель целиком на процессоре, поэтому потоки нужны
+            # все (эвлюация и промпт идут на CPU).
+            llama_threads = str(max(1, os.cpu_count() or 4))
+        cmd += ["--threads", llama_threads]
+
+        # Лог llama-server пишем в файл: он нужен и для сводки offload
+        # (задача 1), и для диагностики крашей (раньше всё уходило в
+        # DEVNULL — причина провала была невидима).
+        llama_log_path = LLAMA_DIR / "llama-server.log"
+        LLAMA_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(llama_log_path, "w", encoding="utf-8", errors="replace") as llama_log:
+                proc = subprocess.Popen(
+                    cmd,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    stdin=subprocess.DEVNULL,
+                    stdout=llama_log,
+                    stderr=subprocess.STDOUT,
+                )
+        except OSError as exc:
+            error_msg = f"Не удалось запустить llama-server: {exc}"
+            self.last_error = error_msg
+            _llama_last_error = error_msg
+            return False
 
         if progress_callback:
             progress_callback("Ожидание запуска llama-server...")
         for _ in range(60):
+            # Процесс умер сразу (нет DLL, занят порт и т.д.) — не ждём
+            # 2 минуты молча, а сразу отдаём хвост лога в ошибку.
+            if proc.poll() is not None:
+                error_msg = (
+                    f"llama-server завершился (код {proc.returncode}) — "
+                    f"хвост лога: {self._llama_log_tail(llama_log_path)}"
+                )
+                self.last_error = error_msg
+                _llama_last_error = error_msg
+                if progress_callback:
+                    progress_callback(f"Ошибка: {error_msg}")
+                return False
             try:
                 r = requests.get(f"{self.base_url}/health", timeout=2)
                 if r.status_code == 200:
                     _llama_actual_port = port
+                    _manage_llama_pid(proc.pid)
+                    _touch_llama()
+                    _ensure_llama_idle_watcher()
+                    if not self._offload_summary_logged:
+                        self._log_offload_summary(str(llama_log_path))
+                        self._offload_summary_logged = True
                     return True
             except requests.RequestException:
                 pass
@@ -796,6 +1175,99 @@ class LlamaCppEnhancer(BaseEnhancer):
             _llama_last_error = self.last_error
             return False
         return self._start_server(server_exe, progress_callback, prefer_port=port)
+
+    @staticmethod
+    def _llama_log_tail(path: Path, limit: int = 3) -> str:
+        """Последние непустые строки лога llama-server для сообщения об ошибке."""
+        try:
+            lines = [
+                ln.strip()
+                for ln in path.read_text(encoding="utf-8", errors="replace").splitlines()
+                if ln.strip()
+            ]
+        except OSError:
+            return "лог недоступен"
+        if not lines:
+            return "лог пуст"
+        return " | ".join(lines[-limit:])
+
+    def _log_offload_summary(self, llama_log) -> None:
+        """Собирает из лога llama-server сводку offload/GPGPU и пишет её
+        в лог приложения (сводка до первого успешного /health).
+
+        Новые сборки llama.cpp не печатают «offloaded N/M layers», поэтому
+        факты о режиме берём из cmdline живого процесса (-ngl, flash-attn),
+        а из лога — модель и треды. Безопасен: если лог ещё не успел
+        записаться, просто молча пропускаем.
+        """
+        try:
+            if isinstance(llama_log, (str, os.PathLike)):
+                path = Path(llama_log)
+            elif hasattr(llama_log, "name"):
+                path = Path(llama_log.name)
+            else:
+                path = None
+        except (TypeError, ValueError):
+            path = None
+        lines: list[str] = []
+        try:
+            if path is not None and path.exists():
+                txt = path.read_text(encoding="utf-8", errors="replace")
+                lines = txt.splitlines()
+            elif hasattr(llama_log, "read"):
+                llama_log.flush()
+                llama_log.seek(0)
+                txt = llama_log.read().decode("utf-8", "replace")
+                lines = txt.splitlines()
+        except (OSError, AttributeError, UnicodeDecodeError):
+            return
+
+        hits: dict[str, list[str]] = {
+            "layers": [],
+            "flash_attn": [],
+            "threads": [],
+            "model": [],
+        }
+        for ln in lines[-400:]:
+            low = ln.lower()
+            is_layers = "offloaded" in low and "layers to gpu" in low
+            is_offload = "offload" in low and ("cpu" in low or "gpu" in low)
+            if is_layers or is_offload:
+                hits["layers"].append(ln.strip())
+            elif "flash_attn" in low and ("on" in low or "true" in low or "=1" in low):
+                hits["flash_attn"].append(ln.strip())
+            elif "threads" in low or "n_threads" in low:
+                hits["threads"].append(ln.strip())
+            elif "model size" in low:
+                hits["model"].append(ln.strip())
+            elif "loading model" in low:
+                m = re.search(r"loading model\s+'([^']+)'", ln, re.IGNORECASE)
+                model = m.group(1) if m else ln.strip()
+                hits["model"].append(model.replace("\\", "/").split("/")[-1])
+
+        summary: list[str] = []
+        # Режим из cmdline живого процесса — главный факт (новые сборки
+        # llama.cpp строчки «offloaded N layers» в лог не пишут).
+        cmdline = _llama_cmdline()
+        m = re.search(r"-ngl\s+(\d+)", cmdline)
+        if m:
+            ngl = int(m.group(1))
+            summary.append(f"{'gpu' if ngl > 0 else 'cpu'} (ngl={ngl})")
+        m = re.search(r"--flash-attn\s+(\w+)", cmdline)
+        if m:
+            summary.append(f"flash-attn: {m.group(1)}")
+        if hits["layers"]:
+            summary.append(hits["layers"][-1])
+        if hits["model"]:
+            summary.append("model: " + hits["model"][-1])
+        if hits["flash_attn"]:
+            summary.append("flash-attn: " + hits["flash_attn"][-1])
+        if hits["threads"]:
+            summary.append("threads: " + hits["threads"][-1])
+        if summary:
+            text = "Llama offload: " + " | ".join(summary)
+            self._offload_summary = text
+            get_logger().info(text)
 
     def _find_server_exe(self):
         """Ищет llama-server.exe в LLAMA_DIR (или подпапках)."""
@@ -829,108 +1301,6 @@ class LlamaCppEnhancer(BaseEnhancer):
         return LLM_MODEL_PATH
 
 
-class SageEnhancer(BaseEnhancer):
-    """Однопроходный корректор русского текста на базе FRED-T5-1.7B (SAGE).
-
-    Исправляет орфографию, пунктуацию и заглавные буквы. Без промптов.
-    """
-
-    def __init__(self, model_dir: os.PathLike | str = SAGE_MODEL_DIR):
-        self.model_dir = os.fspath(model_dir)
-        self._tokenizer = None
-        self._model = None
-
-    def get_engine_name(self) -> str:
-        return "sage"
-
-    def is_available(self) -> tuple[bool, bool]:
-        """Проверяет наличие transformers и скачанной модели."""
-        import importlib.util
-
-        has_tf = importlib.util.find_spec("transformers") is not None
-        model_file = SAGE_MODEL_DIR / "model.safetensors"
-        return has_tf, model_file.exists()
-
-    def _load(self):
-        """Загружает токенизатор и модель (лениво, один раз)."""
-        if self._model is not None:
-            return
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-
-        self._tokenizer = AutoTokenizer.from_pretrained(self.model_dir)
-        self._model = AutoModelForSeq2SeqLM.from_pretrained(self.model_dir)
-
-    def enhance_multi_pass(
-        self,
-        text: str,
-        topic: str = "",
-        progress_callback=None,
-        cancel: Event | None = None,
-        stream_callback=None,
-        timestamps: bool = False,
-    ) -> str:
-        """Однопроходная коррекция. Чанки ≤ SAGE_MAX_CHARS (вход T5 ≤512 токенов)."""
-        if not text.strip():
-            return text
-
-        self._load()
-        assert self._tokenizer is not None and self._model is not None
-
-        chunks = LlamaCppEnhancer._chunk_text(text, SAGE_MAX_CHARS)
-        processed = []
-        for idx, chunk in enumerate(chunks):
-            if cancel is not None and cancel.is_set():
-                break
-            if progress_callback:
-                label = f"SAGE: чанк {idx + 1}/{len(chunks)}"
-                progress_callback(label)
-            if stream_callback is not None:
-                stream_callback(chunk, 1, idx + 1, len(chunks))
-            try:
-                corrected = self._correct_chunk(chunk)
-                if not corrected or len(corrected) < len(chunk) * MULTI_PASS_MIN_RATIO:
-                    corrected = chunk
-            except Exception:
-                corrected = chunk
-            if stream_callback is not None:
-                stream_callback(corrected, 1, idx + 1, len(chunks))
-            processed.append(corrected)
-
-        return "\n\n".join(processed)
-
-    def _correct_chunk(self, chunk: str) -> str:
-        assert self._tokenizer is not None and self._model is not None
-        inputs = self._tokenizer(chunk, return_tensors="pt", truncation=True, max_length=512)
-        outputs = self._model.generate(
-            **inputs,
-            max_new_tokens=512,
-            temperature=0.0,
-        )
-        return self._tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
-
-    def install(self, progress_callback=None) -> bool:
-        """Скачивает ai-forever/sage-v1.1.0 в папку models/sage."""
-        if progress_callback:
-            progress_callback(f"Скачивание модели {SAGE_HF_REPO}...")
-        try:
-            from huggingface_hub import snapshot_download
-        except ImportError:
-            raise RuntimeError(
-                "huggingface_hub не установлен. Установите: pip install huggingface_hub"
-            ) from None
-
-        SAGE_MODEL_DIR.mkdir(parents=True, exist_ok=True)
-        snapshot_download(
-            repo_id=SAGE_HF_REPO,
-            local_dir=SAGE_MODEL_DIR,
-            allow_patterns=["*.json", "*.txt", "*.safetensors", "*.model"],
-        )
-        return self.is_available()[1]
-
-
 def create_enhancer(engine: str | None = None) -> BaseEnhancer:
-    """Фабрика движков по конфигу."""
-    engine = engine or LLM_ENGINE
-    if engine == "sage":
-        return SageEnhancer()
+    """Фабрика движков. Всегда llama.cpp (единственный активный движок)."""
     return LlamaCppEnhancer()

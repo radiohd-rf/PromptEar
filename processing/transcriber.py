@@ -4,11 +4,12 @@ import importlib.util
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from threading import Event
 from typing import Any
 
-from config import CT2_CACHE, WHISPER_DEFAULT_MODEL
+from config import CT2_CACHE, TRANSCRIBE_STALL_TIMEOUT_SEC, WHISPER_DEFAULT_MODEL
 from core.models import Segment
 
 
@@ -29,6 +30,7 @@ def ensure_faster_whisper():
             "nvidia-cublas-cu12",
         ],
         timeout=300,
+        creationflags=subprocess.CREATE_NO_WINDOW,
     )
     if importlib.util.find_spec("faster_whisper") is None:
         print("ОШИБКА: Не удалось установить faster-whisper")
@@ -136,7 +138,13 @@ class Transcriber:
         from core import whisper_models as wm
 
         if model_name is None:
-            model_name = settings_store.load().get("whisper_model") or WHISPER_DEFAULT_MODEL
+            from core import asr_backends as ab
+
+            bk = self.current_backend()
+            if ab.kind_of(bk) == "whisper":
+                model_name = ab.variant_of(bk)
+            else:
+                model_name = settings_store.load().get("whisper_model") or WHISPER_DEFAULT_MODEL
 
         with self._lock:
             if self._model is not None and self._loaded_alias == model_name:
@@ -185,6 +193,14 @@ class Transcriber:
         )
         return text
 
+    def current_backend(self) -> str:
+        """Активный бэкенд распознавания из настроек (валидный)."""
+        from core import asr_backends as ab
+        from core import settings as settings_store
+
+        bk = settings_store.load().get("asr_backend") or ab.DEFAULT_BACKEND
+        return bk if ab.is_backend(bk) else ab.DEFAULT_BACKEND
+
     def transcribe_with_segments(
         self,
         audio_path: Path,
@@ -197,13 +213,14 @@ class Transcriber:
         on_segment вызывается по мере распознавания с накопленным списком сегментов
         (Segment со стартовым таймкодом) — для живого черновика в UI.
 
-        Тяжёлый блокирующий вызов faster-whisper выполняется в фоновом потоке:
-        при установке cancel метод сразу возвращает частичный результат, а
-        брошенный поток догорает до ближайшей границы сегмента и тихо выходит
-        (проверки cancel между сегментами ограничивают догорание одним сегментом).
-        Доступ к модели сериализован self._lock: faster-whisper не потокобезопасен,
-        следующий файл ждёт освобождения модели обычным образом.
+        Тяжёлый блокирующий вызов выполняется в фоновом потоке: при установке
+        cancel метод сразу возвращает частичный результат, а брошенный поток
+        догорает до ближайшей границы (whisper — сегмент, GigaAM — чанк).
+        Доступ к модели сериализован: движки не потокобезопасны.
         """
+        from core import asr_backends as ab
+        from core import settings as settings_store
+
         language = kwargs.pop("language", "ru")
         beam_size = kwargs.pop("beam_size", 5)
         vad_filter = kwargs.pop("vad_filter", True)
@@ -211,11 +228,42 @@ class Transcriber:
         parts: list[str] = []
         raw_segments: list[Segment] = []
         info_box: dict[str, Any] = {}
+        result_box: dict[str, Any] = {}
         done = threading.Event()
         abandoned = threading.Event()
+        backend = self.current_backend()
+        use_gpu = settings_store.load().get("use_gpu", False)
+
+        # Сторож зависших транскрибаций: whisper растёт через parts, GigaAM —
+        # только через on_segment (result_box заполняется в самом конце),
+        # поэтому прогрессом считаем и то, и другое. Без прогресса дольше
+        # TRANSCRIBE_STALL_TIMEOUT_SEC — fail fast с понятной ошибкой вместо
+        # вечного спина (брошенный поток догорит сам на границе чанка).
+        progress_tick = [time.monotonic()]
+        user_on_segment = on_segment
+
+        def on_segment_tracked(segs) -> None:
+            progress_tick[0] = time.monotonic()
+            if user_on_segment is not None:
+                user_on_segment(segs)
 
         def worker() -> None:
             try:
+                progress_tick[0] = time.monotonic()  # поток стартовал
+                if ab.kind_of(backend) == "gigaam":
+                    if abandoned.is_set():
+                        return
+                    from processing import gigaam
+
+                    res = gigaam.transcribe_with_segments(
+                        audio_path,
+                        ab.variant_of(backend),
+                        use_gpu=use_gpu,
+                        cancel=cancel,
+                        on_segment=on_segment_tracked,
+                    )
+                    result_box["res"] = res
+                    return
                 self.load_model()
                 with self._lock:
                     if abandoned.is_set():
@@ -237,8 +285,16 @@ class Transcriber:
                         parsed = Segment(start=seg.start, end=seg.end, text=seg.text)
                         raw_segments.append(parsed)
                         acc = list(raw_segments)
-                        if on_segment is not None and not abandoned.is_set():
-                            on_segment(acc)
+                        if not abandoned.is_set():
+                            on_segment_tracked(acc)
+                    duration = 0.0
+                    if float(getattr(info, "duration", 0.0) or 0.0):
+                        duration = float(info.duration)
+                    elif raw_segments:
+                        duration = float(raw_segments[-1].end or 0.0)
+                    result_box["res"] = (" ".join(parts), raw_segments, duration)
+            except BaseException as exc:
+                result_box["err"] = exc
             finally:
                 done.set()
 
@@ -247,15 +303,33 @@ class Transcriber:
             if cancel is not None and cancel.is_set():
                 abandoned.set()
                 break
-        duration = 0.0
-        info = info_box.get("info")
-        if info is not None:
-            duration = float(getattr(info, "duration", 0.0) or 0.0)
-        if not duration and raw_segments:
-            duration = float(raw_segments[-1].end or 0.0)
-        return " ".join(parts), raw_segments, duration
+            if time.monotonic() - progress_tick[0] > TRANSCRIBE_STALL_TIMEOUT_SEC:
+                abandoned.set()
+                mins = TRANSCRIBE_STALL_TIMEOUT_SEC // 60
+                human = f"{mins} мин" if mins else f"{TRANSCRIBE_STALL_TIMEOUT_SEC} с"
+                raise TimeoutError(
+                    f"Транскрибация зависла: нет прогресса {human}. Возможно, "
+                    "завис GPU-расчёт — попробуйте CPU-режим или файл покороче."
+                )
+        res = result_box.get("res")
+        if res is not None:
+            return res
+        err = result_box.get("err")
+        if err is not None:
+            raise err
+        return " ".join(parts), raw_segments, 0.0
 
     def unload(self):
         """Выгружает модель из памяти."""
         self._model = None
         self._loaded_alias = None
+        try:
+            from core import asr_backends as ab
+
+            bk = self.current_backend()
+            if ab.kind_of(bk) == "gigaam":
+                from processing import gigaam
+
+                gigaam.unload_engine(ab.variant_of(bk))
+        except Exception:
+            pass

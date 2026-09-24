@@ -24,6 +24,26 @@ GCLP_HICONSM = -34
 WM_SETICON = 0x0080
 ICON_SMALL = 0
 ICON_BIG = 1
+ERROR_ALREADY_EXISTS = 183
+
+_mutex_handle = None
+
+
+def _ensure_single_instance() -> None:
+    """Только один запущенный экземпляр (Windows mutex + MessageBox).
+
+    Второй запуск вместо сервера-конкурента (гонки за settings.json, порты,
+    двойная загрузка моделей в память) показывает окно и тихо выходит.
+    """
+    global _mutex_handle
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # Local\\ — видимость в своей сессии (сервисы из session 0 не в счёт).
+    _mutex_handle = kernel32.CreateMutexW(None, True, "Local\\PromptEarSingleInstance")
+    if _mutex_handle and ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
+        ctypes.windll.user32.MessageBoxW(
+            None, "PromptEar уже запущен.", "PromptEar", 0x40
+        )
+        sys.exit(0)
 
 
 def _set_app_user_model_id() -> None:
@@ -75,13 +95,22 @@ def _find_free_port() -> int:
 
 
 def main() -> None:
+    _ensure_single_instance()
     port = _find_free_port()
     url = f"http://127.0.0.1:{port}"
 
-    threading.Thread(
-        target=lambda: app.run(host="127.0.0.1", port=port, debug=False, threaded=True),
-        daemon=True,
-    ).start()
+    def _run_server() -> None:
+        try:
+            import waitress
+
+            # Продакшн WSGI вместо dev-сервера Werkzeug: стабильнее держит
+            # параллельные SSE-стримы и опросы UI (потоков с запасом: стримы
+            # висят занятыми всю задачу).
+            waitress.serve(app, host="127.0.0.1", port=port, threads=8)
+        except ImportError:
+            app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
+
+    threading.Thread(target=_run_server, daemon=True).start()
 
     for _ in range(100):
         try:
@@ -89,6 +118,10 @@ def main() -> None:
             break
         except Exception:
             time.sleep(0.1)
+
+    from utils.logger import get_logger
+
+    get_logger().info(f"Сервер запущен: {url}")
 
     import webview
 

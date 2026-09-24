@@ -1,4 +1,4 @@
-"""Установщики LLM-движков (llama.cpp / SAGE)."""
+"""Установщики LLM-движка (llama.cpp + gemma GGUF)."""
 
 import contextlib
 import threading
@@ -76,48 +76,6 @@ class LlamaCppInstaller:
             except Exception as exc:
                 emit(LogEvent(f"Ошибка установки llama.cpp: {exc}"))
                 emit(LogEvent("  Попробуйте скачать вручную: https://github.com/ggml-org/llama.cpp/releases"))
-                emit(LlmReadyEvent(False, False))
-            finally:
-                emit(SetBusyEvent(False))
-
-        threading.Thread(target=install_worker, daemon=True).start()
-
-
-class SageInstaller:
-    """Установка SAGE-1.7B (FRED-T5-1.7B) — скачивание модели с HuggingFace."""
-
-    @staticmethod
-    def check(
-        enhancer: BaseEnhancer,
-        emit: Callable[[PipelineEvent], None],
-        install_callback: Callable[[], None],
-    ) -> None:
-        def check():
-            ok, model = enhancer.is_available()
-            if ok and model:
-                emit(LlmReadyEvent(True, True))
-            elif ok and not model:
-                emit(LlmReadyEvent(True, False))
-            else:
-                emit(LlmReadyEvent(False, False))
-        threading.Thread(target=check, daemon=True).start()
-
-    @staticmethod
-    def install(
-        enhancer: BaseEnhancer,
-        emit: Callable[[PipelineEvent], None],
-    ) -> None:
-        emit(LogEvent("Скачивание SAGE-1.7B..."))
-        emit(SetBusyEvent(True))
-
-        def install_worker():
-            try:
-                def on_progress(msg):
-                    emit(LogEvent(msg))
-                enhancer.install(progress_callback=on_progress)
-                emit(LlmReadyEvent(True, True))
-            except Exception as exc:
-                emit(LogEvent(f"Ошибка установки SAGE: {exc}"))
                 emit(LlmReadyEvent(False, False))
             finally:
                 emit(SetBusyEvent(False))

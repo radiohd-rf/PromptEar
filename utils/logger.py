@@ -22,6 +22,11 @@ def setup_logger() -> logging.Logger:
 
     _logger = logging.getLogger("PromptEar")
     _logger.setLevel(logging.DEBUG)
+    # Не всплывать к root: туда свои хэндлеры вешают waitress/transformers,
+    # причём под pythonw (sys.stderr=None) они создаются со stream=None и
+    # роняют КАЖДУЮ запись (AttributeError → handleError → печать стека
+    # в cp1251-stderr, где любой не-cp1251 символ типа ≤ уже фатален).
+    _logger.propagate = False
 
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 

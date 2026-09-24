@@ -12,20 +12,11 @@ from pathlib import Path
 from config import CT2_CACHE
 
 # алиас -> (HF repo_id, приблизительный размер в МБ, описание)
-# Порядок — по возрастанию размера (так показывается в UI).
+# По решению пользователя оставлены только две модели: базовая (по умолчанию)
+# и самая мощная large-v3 (для иностранной речи). Остальное — историческое.
 WHISPER_CATALOG: dict[str, tuple[str, int, str]] = {
     "base": ("Systran/faster-whisper-base", 145, "базовая, компромисс"),
-    "small": ("Systran/faster-whisper-small", 488, "лучше для русского"),
-    "distil-large-v3": (
-        "Systran/faster-distil-whisper-large-v3",
-        758,
-        "дистиллированный, быстрый, многоязычный",
-    ),
-    "large-v3-turbo": (
-        "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
-        1547,
-        "точность large-v3, быстрее на CPU",
-    ),
+    "large-v3": ("Systran/faster-whisper-large-v3", 2900, "самая мощная, иностранная речь"),
 }
 
 
@@ -72,4 +63,14 @@ def remove_others(keep_alias: str) -> None:
         if folder != keep_dir and folder.is_dir():
             import shutil
 
+            shutil.rmtree(folder, ignore_errors=True)
+
+
+def remove_all() -> None:
+    """Удаляет каталоги всех моделей Whisper (при переключении на GigaAM)."""
+    import shutil
+
+    CT2_CACHE.mkdir(parents=True, exist_ok=True)
+    for folder in CT2_CACHE.iterdir():
+        if folder.is_dir():
             shutil.rmtree(folder, ignore_errors=True)

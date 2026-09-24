@@ -16,7 +16,8 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
-from config import LLM_ENGINE, TEMP_DIR
+from config import LLM_ENGINE, SETTINGS_OPEN_FLAG, TEMP_DIR
+from core import asr_backends as ab
 from core import settings as settings_store
 from core import whisper_models as wm
 from core.downloader import DownloadManager
@@ -41,6 +42,7 @@ from core.events import (
 )
 from core.models import AudioFile, PipelineConfig
 from core.pipeline import run_pipeline as run_pipeline_core
+from processing import enhancer as enhancer_mod
 from processing.enhancer import create_enhancer, get_llm_error
 from processing.transcriber import Transcriber
 from utils.extract_audio import extract_audio
@@ -211,6 +213,7 @@ def _process_files(task_id: str) -> None:
     task["results"] = {}
     task["skip_file"] = None
     task["status"] = "processing"
+    transcriber = None  # для finally ниже (Transcriber создаётся в try)
 
     def skip_requested(filename: str) -> bool:
         return task.get("skip_file") == filename
@@ -238,8 +241,25 @@ def _process_files(task_id: str) -> None:
         enhancer = None
         enhancer = create_enhancer()
         llm_ok, model_ok = enhancer.is_available()
+        if (
+            not llm_ok
+            and model_ok
+            and config.enhance_mode == "auto"
+            and hasattr(enhancer, "start_server")
+        ):
+            # Движок могли погасить после простоя — поднимаем лениво,
+            # иначе auto-режим молча пропустит улучшение.
+            emit(LogEvent("LLM-движок не запущен — запускаем..."))
+            try:
+                if enhancer.start_server():
+                    llm_ok, model_ok = enhancer.is_available()
+            except Exception as exc:
+                emit(LogEvent(f"Не удалось запустить LLM-движок: {exc}"))
         emit(LlmReadyEvent(llm_ok=llm_ok, model_ok=model_ok))
         config.llm_available = llm_ok and model_ok
+        if config.llm_available and config.enhance_mode == "auto":
+            # Движок понадобится в конце задачи — запрещаем гашение простоем.
+            enhancer_mod.pin_llama_server()
 
         audio_files = []
         display_names = task.get("display_names", {})
@@ -272,6 +292,14 @@ def _process_files(task_id: str) -> None:
         logger.error(f"Pipeline error: {exc}", exc_info=True)
         emit(ErrorEvent(str(exc)))
     finally:
+        with contextlib.suppress(Exception):
+            enhancer_mod.unpin_llama_server()
+        # Whisper-модель per-task: выгружаем детерминированно, не надеясь на GC.
+        # GigaAM не трогаем — его греет сторож простоя (5 мин), unload() при
+        # смене бэкенда сохранён. _loaded_alias set ⇒ грузили именно whisper.
+        if transcriber is not None and transcriber._loaded_alias is not None:
+            with contextlib.suppress(Exception):
+                transcriber.unload()
         # загруженные исходники чистим всегда — они временные копии в uploads/
         for f_path_str in task.get("uploaded_files", []):
             p = Path(f_path_str)
@@ -303,7 +331,7 @@ def upload_files():
         return jsonify({"error": "no files"}), 400
 
     active_dl = get_download_manager().active
-    if active_dl and active_dl["kind"] in ("whisper",):
+    if active_dl and active_dl["kind"] in ("whisper", "gigaam_deps", "gigaam_model"):
         return (
             jsonify({"error": "Идёт скачивание модели — дождитесь завершения, затем запустите"}),
             409,
@@ -320,6 +348,24 @@ def upload_files():
         "output_format": request.form.get("output_format", "docx"),
         "timestamps": request.form.get("timestamps") == "1",
     }
+    backend = request.form.get("backend")
+    if ab.is_backend(backend):
+        launch_patch["asr_backend"] = backend
+    if backend and ab.kind_of(backend) == "gigaam":
+        from processing import gigaam
+
+        if not gigaam.gigaam_deps_ok():
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "GigaAM не установлен — выберите движок в окне "
+                            "запуска и подтвердите установку компонентов"
+                        )
+                    }
+                ),
+                400,
+            )
     wm_val = request.form.get("whisper_model")
     if wm_val in wm.WHISPER_CATALOG:
         launch_patch["whisper_model"] = wm_val
@@ -470,6 +516,28 @@ def task_results(task_id):
     return jsonify({"results": results})
 
 
+def _ensure_llm(enhancer) -> tuple[bool, str | None]:
+    """Гарантирует, что ИИ-движок доступен (llama-server запущен, модель на месте).
+
+    Модель может быть скачана, но llama-server не поднят (например, после
+    перезапуска приложения) — тогда стартуем его лениво, по первому запросу
+    улучшения/перевода, а не предлагаем скачивать модель заново.
+    """
+    from processing.enhancer import get_llm_error
+
+    llm_ok, model_ok = enhancer.is_available()
+    if llm_ok and model_ok:
+        return True, None
+    if not model_ok:
+        return False, "Модель ИИ не установлена"
+    ok = enhancer.start_server()
+    if ok:
+        llm_ok2, model_ok2 = enhancer.is_available()
+        if llm_ok2 and model_ok2:
+            return True, None
+    return False, get_llm_error() or "LLM недоступен"
+
+
 @app.route("/api/enhance/<task_id>/<filename>", methods=["POST"])
 def enhance_file(task_id, filename):
     """Улучшает уже сохранённый черновик (режим ask) и перезаписывает файл."""
@@ -492,9 +560,9 @@ def enhance_file(task_id, filename):
 
     try:
         enhancer = create_enhancer()
-        llm_ok, model_ok = enhancer.is_available()
-        if not (llm_ok and model_ok):
-            return jsonify({"error": "LLM недоступен"}), 409
+        ready, err = _ensure_llm(enhancer)
+        if not ready:
+            return jsonify({"error": err or "LLM недоступен"}), 409
     except Exception as exc:
         return jsonify({"error": str(exc)}), 409
 
@@ -619,9 +687,9 @@ def translate_file(task_id, filename):
 
     try:
         enhancer = create_enhancer()
-        llm_ok, model_ok = enhancer.is_available()
-        if not (llm_ok and model_ok):
-            return jsonify({"error": "LLM недоступен"}), 409
+        ready, err = _ensure_llm(enhancer)
+        if not ready:
+            return jsonify({"error": err or "LLM недоступен"}), 409
     except Exception as exc:
         return jsonify({"error": str(exc)}), 409
 
@@ -680,6 +748,7 @@ def translate_file(task_id, filename):
         save_docx(out_path, translated)
     else:
         save_text_output(out_path, output_format, translated)
+    task.setdefault("translated_paths", {})[filename] = str(out_path)
     return jsonify(
         {
             "text": translated,
@@ -687,6 +756,47 @@ def translate_file(task_id, filename):
             "language_name": language_name or language_code,
         }
     )
+
+
+@app.route("/api/open-doc/<task_id>/<filename>", methods=["POST"])
+def open_doc(task_id, filename):
+    """Открывает готовый документ файла во внешнем редакторе (os.startfile).
+
+    Тело: {"translated": true} — открыть переведённую копию, иначе основной результат.
+    """
+    import os
+
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({"error": "задача не найдена"}), 404
+
+    data = request.get_json(silent=True) or {}
+    path = None
+    if data.get("translated"):
+        path = task.get("translated_paths", {}).get(filename)
+    if path is None:
+        result = next(
+            (
+                r
+                for r in task.get("results", {}).values()
+                if (r.audio.display_name or r.audio.path.name) == filename
+            ),
+            None,
+        )
+        if result is None:
+            return jsonify({"error": "файл не найден"}), 404
+        path = result.output_path
+    if not path:
+        return jsonify({"error": "готовый документ ещё не сохранён"}), 404
+
+    p = Path(path)
+    if not p.exists():
+        return jsonify({"error": f"файл не найден: {p.name}"}), 404
+    try:
+        os.startfile(str(p))  # Windows: открывает в редакторе по умолчанию
+    except OSError as exc:
+        return jsonify({"error": f"не удалось открыть: {exc}"}), 500
+    return jsonify({"ok": True, "name": p.name})
 
 
 @app.route("/api/translate/cancel/<task_id>/<filename>", methods=["POST"])
@@ -718,37 +828,87 @@ def gpu_status():
 
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
-    return jsonify(settings_store.load())
+    data = settings_store.load()
+    # Показываем фактический порт работающего движка, а не устаревшее значение
+    # из settings.json (например, если порт выбрали вручную или авто-подбором).
+    actual = enhancer_mod._llama_actual_port
+    if actual is not None and data.get("llm_port") != actual:
+        data["llm_port"] = actual
+    return jsonify(data)
 
 
 @app.route("/api/settings", methods=["POST"])
 def post_settings():
     """Сохраняет патч настроек в settings.json (валидные ключи)."""
     patch = request.get_json(silent=True) or {}
-    return jsonify(settings_store.save(patch))
+    was_gpu = bool(settings_store.load().get("use_gpu", False))
+    result = settings_store.save(patch)
+
+    # Включили «Использовать GPU» → убеждаемся, что под ИИ стоит CUDA-сборка
+    # llama.cpp (CPU-сборка из комплекта GPU не понимает). Качаем один раз в фоне.
+    if (
+        bool(patch.get("use_gpu"))
+        and not was_gpu
+        and not _has_cuda_llama_build()
+    ):
+        threading.Thread(target=_auto_cuda_build, daemon=True).start()
+
+    # Любое переключение «Использовать GPU» останавливает llama-server:
+    #  - выключили GPU → модель (запущенная с -ngl) освобождает видеопамять;
+    #  - включили GPU → старый CPU-сервер (-ngl 0) не переиспользуется и при
+    #    следующем запуске движок стартует заново уже с GPU-оффлоадом (-ngl 99).
+    if "use_gpu" in patch and bool(patch["use_gpu"]) != was_gpu:
+        with contextlib.suppress(Exception):
+            enhancer_mod.stop_llama_server()
+        with contextlib.suppress(Exception):
+            enhancer_mod._llama_actual_port = None
+
+    return jsonify(result)
+
+
+def _has_cuda_llama_build() -> bool:
+    from config import LLAMA_DIR
+
+    return any(LLAMA_DIR.rglob("ggml-cuda*.dll"))
+
+
+def _auto_cuda_build() -> None:
+    """Фоновая установка CUDA-сборки llama.cpp после включения «Использовать GPU»."""
+    import time
+
+    try:
+        # даём POST /api/settings спокойно вернуться клиенту
+        time.sleep(0.5)
+        if _has_cuda_llama_build():
+            return
+        manager = get_download_manager()
+        if manager.active is not None:
+            return
+        manager.start("llama_gpu")
+    except Exception as exc:
+        logger.error(f"[llm] автоматическая установка CUDA-сборки не удалась: {exc}")
 
 
 @app.route("/api/models")
 def models_catalog():
-    """Каталог моделей Whisper + установленная + есть ли Gemma."""
+    """Каталог движков распознавания + установленные + статус Gemma/GigaAM."""
     from config import LLM_MODEL_PATH
+    from processing import gigaam as gigaam_engine
 
-    catalog = {
-        alias: {
-            "description": desc,
-            "size_mb": wm.size_mb(alias),
-            "installed": wm.is_installed(alias),
-        }
-        for alias, (_, _size, desc) in wm.WHISPER_CATALOG.items()
-    }
-    current = settings_store.load().get("whisper_model")
-    if current not in wm.WHISPER_CATALOG:
-        current = wm.installed_model() or next(iter(wm.WHISPER_CATALOG))
+    backends = []
+    for entry in ab.get_backends():
+        entry = dict(entry)
+        entry["installed"] = ab.is_installed(entry["id"])
+        backends.append(entry)
+    current = settings_store.load().get("asr_backend")
+    if not (isinstance(current, str) and ab.is_backend(current)):
+        current = ab.installed_backend() or ab.DEFAULT_BACKEND
     return jsonify(
         {
-            "catalog": catalog,
-            "installed": wm.installed_model(),
+            "backends": backends,
             "current": current,
+            "installed": ab.installed_backend(),
+            "gigaam_deps_ok": gigaam_engine.gigaam_deps_ok(),
             "gemma_installed": LLM_MODEL_PATH.exists(),
         }
     )
@@ -756,14 +916,27 @@ def models_catalog():
 
 @app.route("/api/downloads", methods=["POST"])
 def start_download():
-    """Запускает скачивание: {kind: whisper|gemma|llama, model?}."""
+    """Запускает скачивание: whisper|gigaam_deps|gigaam_model|gemma|llama|llama_gpu."""
     data = request.get_json(silent=True) or {}
     kind = data.get("kind")
-    if kind not in ("whisper", "gemma", "llama"):
+    if kind not in (
+        "whisper",
+        "gigaam_deps",
+        "gigaam_model",
+        "gemma",
+        "llama",
+        "llama_gpu",
+    ):
         return jsonify({"error": "Неизвестный тип скачивания"}), 400
     model = data.get("model")
-    if kind == "whisper" and model not in wm.WHISPER_CATALOG:
-        return jsonify({"error": f"Неизвестная модель: {model}"}), 400
+    if kind == "whisper":
+        if model and not (ab.is_backend(model) and ab.kind_of(model) == "whisper"):
+            return jsonify({"error": f"Неизвестная модель: {model}"}), 400
+        if not model:
+            model = ab.DEFAULT_BACKEND
+    elif kind == "gigaam_model":
+        if not (model and ab.is_backend(model) and ab.kind_of(model) == "gigaam"):
+            return jsonify({"error": f"Неизвестный вариант GigaAM: {model}"}), 400
     manager = get_download_manager()
     if manager.active is not None:
         return jsonify(
@@ -810,9 +983,33 @@ def downloads_stream():
     return Response(generate(), mimetype="text/event-stream")
 
 
+@app.route("/api/startup")
+def startup_intent():
+    """Единоразовые указания с прошлого запуска (снимаются после чтения).
+
+    Сейчас отвечает {"open_settings": bool} — открыть ли настройки при старте.
+    """
+    want = SETTINGS_OPEN_FLAG.exists()
+    if want:
+        with contextlib.suppress(OSError):
+            SETTINGS_OPEN_FLAG.unlink()
+    return jsonify({"open_settings": want})
+
+
 @app.route("/api/restart", methods=["POST"])
 def restart_app():
-    """Перезапускает приложение (используется после установки CUDA)."""
+    """Перезапускает приложение.
+
+    Тело {"open_settings": true} — после перезапуска открыть окно настроек
+    (полезно при смене GPU, когда нужен рестарт).
+    """
+    data = request.get_json(silent=True) or {}
+    if data.get("open_settings"):
+        try:
+            SETTINGS_OPEN_FLAG.parent.mkdir(parents=True, exist_ok=True)
+            SETTINGS_OPEN_FLAG.write_text("1", encoding="utf-8")
+        except OSError:
+            pass
     try:
         subprocess.Popen(
             [sys.executable, str(Path(__file__).resolve().parent.parent / "main.py")],
@@ -843,11 +1040,19 @@ def llm_check():
         error = None
         if not llm_ok:
             error = getattr(enhancer, "last_error", None) or get_llm_error()
+            # Причина ещё не установилась, но модель на месте — движок просто
+            # не запущен и стартует лениво по первому улучшению/переводу.
+            if not error and model_ok:
+                error = (
+                    "Движок не запущен — стартует автоматически "
+                    "при первом «Улучшить с ИИ» или «Перевести»"
+                )
         return jsonify(
             {
                 "llm_ok": llm_ok,
                 "model_ok": model_ok,
                 "engine": LLM_ENGINE,
+                "port": enhancer_mod._llama_actual_port or None,
                 "error": error,
                 "installing": _llm_install_running,
                 "install_error": _llm_install_last_error,
@@ -858,6 +1063,8 @@ def llm_check():
             {
                 "llm_ok": False,
                 "model_ok": False,
+                "engine": LLM_ENGINE,
+                "port": enhancer_mod._llama_actual_port or None,
                 "error": str(exc),
                 "installing": _llm_install_running,
                 "install_error": _llm_install_last_error,
@@ -901,6 +1108,56 @@ def llm_cancel():
     return jsonify({"ok": True})
 
 
+@app.route("/api/llm/delete", methods=["POST"])
+def llm_delete():
+    """Удаляет модель ИИ (GGUF): останавливает llama-server (он держит файл) и стирает модель."""
+    import subprocess
+    import time
+
+    from config import LLM_MODEL_PATH
+
+    if _llm_install_running:
+        return jsonify({"ok": False, "error": "Скачивание модели ещё идёт"}), 409
+    if not LLM_MODEL_PATH.exists():
+        return jsonify({"ok": True})
+
+    # llama-server держит GGUF открытым — Windows не даст удалить, пока процесс жив.
+    subprocess.run(
+        ["taskkill", "/IM", "llama-server.exe", "/F"],
+        capture_output=True,
+        check=False,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+
+    # Файл может быть ещё занят пару мгновений после taskkill — пробуем с ретраями.
+    last_exc: Exception | None = None
+    for _ in range(10):
+        try:
+            LLM_MODEL_PATH.unlink(missing_ok=True)
+            break
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(0.3)
+    if LLM_MODEL_PATH.exists():
+        return jsonify({"ok": False, "error": f"Не удалось удалить файл: {last_exc}"}), 500
+
+    settings_store.save({"ai_enabled": False})
+    return jsonify({"ok": True})
+
+
+def _port_has_llama(port: int) -> bool:
+    """Порт занят именно нашим llama-server (отвечает на /health 200)?"""
+    import requests
+
+    try:
+        return (
+            requests.get(f"http://127.0.0.1:{port}/health", timeout=0.4).status_code
+            == 200
+        )
+    except requests.RequestException:
+        return False
+
+
 @app.route("/api/llm/port", methods=["POST"])
 def llm_set_port():
     """Задаёт порт llama-server вручную и пытается перезапустить движок."""
@@ -912,11 +1169,30 @@ def llm_set_port():
     if not (1024 <= port <= 65535):
         return jsonify({"ok": False, "error": "Порт должен быть в диапазоне 1024–65535"}), 400
 
+    # Порт уже занят: если это наш рабочий llama-server — это успех, а не ошибка
+    # (иначе пользователь вводит работающий порт и получает «занят другим процессом»).
+    port_busy = False
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.bind(("127.0.0.1", port))
         sock.close()
     except OSError:
+        port_busy = True
+
+    except_our_port = False
+    if port_busy and _port_has_llama(port):
+        enhancer = create_enhancer()
+        # Порт занят нашим сервером, но в правильном ли он режиме? При включённом
+        # GPU и живом CPU-движке (-ngl 0) is_available() вернёт False — тогда
+        # идём к start_server() ниже, который убьёт CPU-движок и поднимет с GPU.
+        if enhancer.is_available()[0]:
+            if enhancer_mod._llama_actual_port != port:
+                enhancer_mod._llama_actual_port = port
+            settings_store.save({"llm_port": port})
+            return jsonify({"ok": True, "port": port, "engine": LLM_ENGINE})
+        except_our_port = True
+
+    if port_busy and not except_our_port:
         return jsonify({"ok": False, "error": f"Порт {port} уже занят другим процессом"}), 409
 
     try:
@@ -926,9 +1202,11 @@ def llm_set_port():
         if hasattr(enhancer, "port_override"):
             enhancer.port_override = port
         ok = enhancer.start_server(port=port)
-        params = {"ok": ok, "port": port, "engine": LLM_ENGINE}
+        # Сообщаем ФАКТИЧЕСКИЙ порт (движок мог быть уже запущен на другом).
+        actual = enhancer_mod._llama_actual_port or port
+        params = {"ok": ok, "port": actual, "engine": LLM_ENGINE}
         if ok:
-            settings_store.save({"llm_port": port})
+            settings_store.save({"llm_port": actual})
         if not ok:
             params["error"] = getattr(enhancer, "last_error", None)
         return jsonify(params)

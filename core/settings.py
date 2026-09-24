@@ -6,6 +6,7 @@ from config import SETTINGS_FILE
 
 DEFAULT_SETTINGS = {
     "whisper_model": "base",
+    "asr_backend": "whisper_base",
     "use_gpu": False,
     "output_format": "docx",
     "timestamps": False,

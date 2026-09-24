@@ -7,17 +7,22 @@ let isDark = null;            // null = системная тема; true/false 
 let enhanceMode = 'auto';
 let currentFileName = null;
 let liveFile = null;
-let launchParams = {};   // последние параметры запуска (формат, тайм-коды, ИИ, модель, GPU)
-let appSettings = {whisper_model: 'base', use_gpu: false, output_format: 'docx', timestamps: false, ai_enabled: false};
-let modelCatalog = {};
+// Файл, явно выбранный кликом (selectFile). Пока закреплён — окно не
+// уводят события других файлов (только сохраняем их тексты/статусы).
+// Снимается новым запуском. Без закрепления окно следует за работой.
+let userPinnedFile = null;
+let launchParams = {};   // последние параметры запуска (формат, тайм-коды, ИИ, движок, GPU)
+let appSettings = {asr_backend: 'whisper_base', use_gpu: false, output_format: 'docx', timestamps: false, ai_enabled: false};
+let backendList = [];       // [{id, kind, group, label, size_mb, description, installed}]
 let installedModel = null;
 let gemmaInstalled = false;
+let gigaamDepsOk = false;
 let gpuReport = null;
 let activeDownload = null;   // {id, kind, model, label} | null
 let downloadResolver = null; // {resolve, reject} — ожидающий startDownload()
 
 function downloadBlockingRun() {
-  return !!activeDownload && activeDownload.kind === 'whisper';
+  return !!activeDownload && ['whisper', 'gigaam_deps', 'gigaam_model'].includes(activeDownload.kind);
 }
 const fileStatuses = {};   // имя -> status
 const fileTexts = {};      // имя -> последний текст (черновик/улучшенный)
@@ -141,19 +146,27 @@ function openLaunchModal() {
 }
 function closeLaunchModal() { closeModal('launch-overlay'); }
 
-function openSettingsModal() {
+async function openSettingsModal() {
+  await refreshModels();          // свежий статус модели ИИ → кнопка «Удалить модель» актуальна
   fillModal('settings-overlay');
   openModal('settings-overlay');
 }
 function closeSettingsModal() { closeModal('settings-overlay'); }
 
 function modelOptions() {
-  return Object.entries(modelCatalog)
-    .sort((a, b) => a[1].size_mb - b[1].size_mb)
-    .map(([alias, info]) => {
-      const mark = info.installed ? ' ✓' : ` (~${info.size_mb} МБ)`;
-      const desc = info.installed ? '' : ` — ${info.description}`;
-      return `<option value="${alias}">${alias}${desc}${mark}</option>`;
+  const byGroup = {};
+  for (const b of backendList) {
+    byGroup[b.group] = byGroup[b.group] || [];
+    byGroup[b.group].push(b);
+  }
+  return Object.keys(byGroup)
+    .map(group => {
+      const body = byGroup[group].map(b => {
+        const mark = b.installed ? ' ✓' : ` (~${b.size_mb} МБ)`;
+        const desc = b.installed ? '' : ` — ${b.description}`;
+        return `<option value="${b.id}">${b.label}${desc}${mark}</option>`;
+      }).join('');
+      return `<optgroup label="${group === 'gigaam' ? 'GigaAM v3 (русский)' : 'Whisper (многоязычный)'}">${body}</optgroup>`;
     }).join('');
 }
 
@@ -201,10 +214,46 @@ function fillModal(rootId) {
   const model = field('model');
   if (model) {
     model.innerHTML = modelOptions();
-    model.value = installedModel || appSettings.whisper_model || 'base';
+    model.value = currentBackend() || appSettings.asr_backend || 'whisper_base';
   }
   setGpuCheckbox(root);
   updateFormatHints();
+}
+
+async function deleteAiModel() {
+  const ok = await confirmPopup('Удалить модель ИИ (gemma, ~3 ГБ) и отключить обработку с ИИ?');
+  if (!ok) return;
+  try {
+    const resp = await fetch('/api/llm/delete', { method: 'POST' });
+    const data = await resp.json();
+    if (!data.ok) {
+      addLog(`❌ Не удалось удалить модель: ${data.error || 'ошибка сервера'}`);
+      return;
+    }
+    appSettings.ai_enabled = false;
+    addLog('🗑 Модель ИИ удалена');
+    await refreshModels();
+    refreshLlmStatus();
+    fillAiCheckboxes();
+  } catch (err) {
+    addLog(`❌ ${err.message}`);
+  }
+}
+
+function fillAiCheckboxes() {
+  for (const rootId of ['launch-overlay', 'settings-overlay']) {
+    const ai = document.querySelector(`#${rootId} [data-field="ai"]`);
+    if (ai) ai.checked = !!appSettings.ai_enabled;
+  }
+}
+
+function currentBackend() {
+  const bk = appSettings.asr_backend || 'whisper_base';
+  return backendList.some(b => b.id === bk) ? bk : 'whisper_base';
+}
+
+function backendInfo(id) {
+  return backendList.find(b => b.id === id) || null;
 }
 
 function collectModal(rootId) {
@@ -214,7 +263,7 @@ function collectModal(rootId) {
     output_format: field('format').value,
     timestamps: !!field('timestamps').checked,
     ai_enabled: !!field('ai').checked,
-    whisper_model: field('model').value,
+    asr_backend: field('model').value,
     use_gpu: !!field('gpu').checked,
   };
 }
@@ -407,10 +456,11 @@ function refreshGpuStatusUI() {
 async function refreshModels() {
   try {
     const data = await (await fetch('/api/models')).json();
-    modelCatalog = data.catalog || {};
+    backendList = data.backends || [];
     installedModel = data.installed;
     gemmaInstalled = !!data.gemma_installed;
-    if (data.current) appSettings.whisper_model = data.current;
+    gigaamDepsOk = !!data.gigaam_deps_ok;
+    if (data.current) appSettings.asr_backend = data.current;
     syncEnhanceButton();
   } catch (_) {}
 }
@@ -430,23 +480,34 @@ async function refreshSettings() {
 function handleModelChange(e) {
   const sel = e.target;
   const target = sel.value;
-  const info = modelCatalog[target];
+  const info = backendInfo(target);
   if (!info) return;
-  if (info.installed || target === installedModel) return;
+  const fallback = () => { sel.value = currentBackend(); };
+  if (info.installed && !(info.kind === 'gigaam' && !gigaamDepsOk)) return;
+  if (target === installedModel && info.kind === 'whisper') return;
   const cur = installedModel ? ` Текущая модель (${installedModel}) будет удалена.` : '';
-  confirmPopup(`Скачать модель ${target} (~${info.size_mb} МБ)?${cur}`)
-    .then(async (ok) => {
-      if (!ok) {
-        sel.value = installedModel || appSettings.whisper_model || 'base';
-        return;
+
+  (async () => {
+    try {
+      if (info.kind === 'gigaam' && !gigaamDepsOk) {
+        const ok = await confirmPopup(
+          'GigaAM требует установки компонентов (torch CUDA + pyannote, ~2.5 ГБ). Продолжить?'
+        );
+        if (!ok) { fallback(); return; }
+        await startDownload('gigaam_deps');
+        gigaamDepsOk = true;
       }
-      try {
-        await startDownload('whisper', target);
-        await refreshModels();
-      } catch (_) {
-        sel.value = installedModel || appSettings.whisper_model || 'base';
+      if (!info.installed && target !== installedModel) {
+        const ok = await confirmPopup(`Скачать ${info.label} (~${info.size_mb} МБ)?${info.kind === 'whisper' ? cur : ' Текущая модель будет удалена.'}`);
+        if (!ok) { fallback(); return; }
+        await startDownload(info.kind === 'gigaam' ? 'gigaam_model' : 'whisper', target);
       }
-    });
+      await refreshModels();
+      sel.value = currentBackend();
+    } catch (_) {
+      fallback();
+    }
+  })();
 }
 
 function handleAiChange(e) {
@@ -479,7 +540,7 @@ async function handleGpuChange(e) {
     refreshGpuStatusUI();
     const restart = await confirmPopup('GPU выключен. Перезапустить программу?');
     if (restart) {
-      fetch('/api/restart', {method: 'POST'}).catch(() => {});
+      requestRestart();
     }
     return;
   }
@@ -505,7 +566,7 @@ async function handleGpuChange(e) {
         refreshGpuStatusUI();
         const restart = await confirmPopup('GPU включён. Перезапустить программу?');
         if (restart) {
-          fetch('/api/restart', {method: 'POST'}).catch(() => {});
+          requestRestart();
         }
       } catch (_) {
         cb.checked = false;
@@ -564,6 +625,7 @@ function removeFile(idx) {
   delete fileTranslations[name];
   files.splice(idx, 1);
   if (currentFileName === name) currentFileName = null;
+  if (userPinnedFile === name) userPinnedFile = null;
   if (liveFile === name) liveFile = null;
   renderFileList();
   // перевести live-индикацию на оставшийся активный файл
@@ -599,11 +661,13 @@ function renderFileList() {
       <span class="remove" onclick="event.stopPropagation(); removeFile(${i})" title="Убрать из списка" aria-label="Убрать из списка">✕</span>
     </li>`;
   }).join('');
+  syncResultActions();
 }
 
 function selectFile(name) {
   if (!fileStatuses[name] || fileStatuses[name] === 'queued') return;
   currentFileName = name;
+  userPinnedFile = name;
   renderFileList();
   const text = fileTexts[name] || '';
   const improved = fileBadges[name] === 'Улучшено ИИ';
@@ -616,6 +680,37 @@ function selectFile(name) {
   }
   syncEnhanceButton();
   syncTranslateButton();
+}
+
+// Кнопки «Копировать» и «Открыть в редакторе» — появляются, когда у
+// текущего файла есть готовый результат.
+function syncResultActions() {
+  const name = currentFileName;
+  const hasDoc = !!(name && (fileTexts[name] || fileTranslations[name]));
+  const copy = document.getElementById('copy-btn');
+  const openDoc = document.getElementById('open-doc-btn');
+  if (copy) copy.style.display = hasDoc ? '' : 'none';
+  if (openDoc) openDoc.style.display = hasDoc ? '' : 'none';
+}
+
+async function openResultDoc() {
+  if (!taskId || !currentFileName) return;
+  const tr = fileTranslations[currentFileName];
+  const body = tr && tr.outputPath ? { translated: true } : {};
+  try {
+    const resp = await fetch(
+      `/api/open-doc/${taskId}/${encodeURIComponent(currentFileName)}`,
+      { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) }
+    );
+    const data = await resp.json();
+    if (data.error) {
+      addLog(`❌ ${data.error}`);
+    } else {
+      addLog(`🖊 Открыт в редакторе: ${data.name}`);
+    }
+  } catch (err) {
+    addLog(`❌ ${err.message}`);
+  }
 }
 
 // Кнопка «Перевести» — видна всегда, когда есть текст результата;
@@ -752,7 +847,7 @@ async function runPipeline() {
     return;
   }
 
-  const p = launchParams && launchParams.whisper_model ? launchParams : appSettings;
+  const p = launchParams && launchParams.asr_backend ? launchParams : appSettings;
   const formData = new FormData();
   for (const f of files) {
     formData.append('files', f);
@@ -761,7 +856,7 @@ async function runPipeline() {
   enhanceMode = p.ai_enabled ? 'auto' : 'none';
   formData.append('output_format', p.output_format || 'docx');
   formData.append('timestamps', p.timestamps ? '1' : '0');
-  formData.append('whisper_model', p.whisper_model || 'base');
+  formData.append('backend', p.asr_backend || 'whisper_base');
   formData.append('use_gpu', p.use_gpu ? '1' : '0');
 
   const ctx = document.getElementById('context-prompt').value.trim();
@@ -830,11 +925,18 @@ function handleEvent(msg) {
       addLog(msg.message);
       break;
 
-    case 'draft':
-      liveFile = currentFileName || msg.filename || firstActiveFile();
+    case 'draft': {
+      const dkey = msg.filename || liveFile;
+      if (!dkey) break;
+      // Текст всегда кладём под СВОЙ файл, иначе черновик активного файла
+      // затирает текст закреплённого (currentFileName мог залипнуть).
+      fileTexts[dkey] = msg.text;
+      fileBadges[dkey] = 'Черновик (Whisper)';
+      if (msg.filename && !followFile(msg.filename)) break;
+      autoFollow(msg.filename);
+      liveFile = liveFile || msg.filename || firstActiveFile();
+      if (!liveFile) break;
       setLiveFile(liveFile);
-      fileTexts[liveFile] = msg.text;
-      fileBadges[liveFile] = 'Черновик (Whisper)';
       if (msg.final) {
         finishStreaming(msg.text, false);
       } else {
@@ -847,6 +949,7 @@ function handleEvent(msg) {
         syncTranslateButton();
       }
       break;
+    }
 
     case 'enhancing':
       showEnhanceProgress(msg.active_pass, msg.total_passes);
@@ -875,10 +978,10 @@ function handleEvent(msg) {
 
     case 'enhancing_stream':
       if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
-      liveFile = currentFileName || msg.filename || firstActiveFile();
-      setLiveFile(liveFile);
-      fileTexts[liveFile] = msg.text;
-      fileBadges[liveFile] = 'Обработка';
+      fileTexts[msg.filename] = msg.text;
+      fileBadges[msg.filename] = 'Обработка';
+      if (!followFile(msg.filename)) { renderFileList(); break; }
+      setLiveFile(msg.filename);
       // не печатаем по токенам: копим полный текст прохода,
       // он появится целиком на переходе к следующему проходу
       lastPassText = msg.text;
@@ -886,10 +989,10 @@ function handleEvent(msg) {
 
     case 'result':
       if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
-      liveFile = currentFileName || msg.filename || firstActiveFile();
-      setLiveFile(liveFile);
-      fileTexts[liveFile] = msg.text;
-      fileBadges[liveFile] = 'Улучшено ИИ';
+      fileTexts[msg.filename] = msg.text;
+      fileBadges[msg.filename] = 'Улучшено ИИ';
+      if (!followFile(msg.filename)) { renderFileList(); break; }
+      setLiveFile(msg.filename);
       hideEnhanceProgress();
       startPassTransition(msg.text);
       syncEnhanceButton();
@@ -900,8 +1003,7 @@ function handleEvent(msg) {
       if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
       fileStatuses[msg.filename] = msg.status;
       if (msg.status === 'transcribing') {
-        liveFile = msg.filename;
-        setLiveFile(liveFile);
+        autoFollow(msg.filename);
         document.getElementById('skip-btn').style.display = '';
       }
       renderFileList();
@@ -911,7 +1013,8 @@ function handleEvent(msg) {
       if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
       fileStatuses[msg.filename] = 'skipped';
       fileBadges[msg.filename] = fileBadges[msg.filename] || 'Черновик';
-      liveFile = currentFileName || msg.filename;
+      autoFollow(msg.filename);
+      liveFile = liveFile || msg.filename;
       setLiveFile(liveFile);
       document.getElementById('skip-btn').style.display = 'none';
       renderFileList();
@@ -919,7 +1022,8 @@ function handleEvent(msg) {
 
     case 'progress':
       if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
-      liveFile = currentFileName || msg.filename;
+      autoFollow(msg.filename);
+      liveFile = liveFile || msg.filename;
       setLiveFile(liveFile);
       break;
 
@@ -979,8 +1083,30 @@ function setLiveFile(name) {
   if (name && name !== liveFile) {
     liveFile = name;
     currentFileName = name;
+    // Окно переключили на другой файл — показать ЕГО текст (или пусто),
+    // иначе залипает текст предыдущего файла.
+    const text = fileTexts[name] || '';
+    const improved = fileBadges[name] === 'Улучшено ИИ';
+    const tr = fileTranslations[name];
+    if (tr) {
+      setResultText(tr.text, true);
+    } else {
+      setResultText(text, improved);
+    }
   }
   renderFileList();
+}
+
+// Следовать ли окну за событием файла: да, если пользователь явно не
+// закрепил кликом другой файл.
+function followFile(name) {
+  if (!name) return true;
+  return !userPinnedFile || userPinnedFile === name;
+}
+
+// Показать файл, за которым следим (активный файл задачи).
+function autoFollow(name) {
+  if (name && followFile(name)) setLiveFile(name);
 }
 
 function cancelPipeline() {
@@ -1182,6 +1308,7 @@ function showLivePanel() {
 function resetResult() {
   currentFileName = null;
   liveFile = null;
+  userPinnedFile = null;
   hideEnhanceButton();
   hideEnhanceStatus();
   hideEnhanceProgress();
@@ -1630,6 +1757,22 @@ function clearLog() {
   document.getElementById('log').innerHTML = '';
 }
 
+async function copyLogs() {
+  const text = document.getElementById('log').innerText;
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (_) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  }
+  addLog('📋 Логи скопированы в буфер обмена');
+}
+
 function openOutputFolder() {
   fetch('/api/open-output');
 }
@@ -1658,7 +1801,14 @@ function syncFileListHeight() {
   }
 }
 
-async function init() {
+function requestRestart() {
+  fetch('/api/restart', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({open_settings: true}),
+  }).catch(() => {});
+}
+  async function init() {
   initTheme();
   syncFileListHeight();
   connectDownloads();
@@ -1673,6 +1823,11 @@ async function init() {
       showDownloadModal();
     }
   } catch (_) {}
+  // Перезапуск при смене GPU просил открыть настройки — выполняем.
+  try {
+    const st = await (await fetch('/api/startup', {cache: 'no-store'})).json();
+    if (st && st.open_settings) openSettingsModal();
+  } catch (_) {}
 }
 
 async function refreshLlmStatus() {
@@ -1685,10 +1840,10 @@ async function refreshLlmStatus() {
     const portField = document.querySelector(
       '#settings-overlay .modal-port-row'
     )?.closest('.modal-field');
-    if (llm.llm_ok) {
+    if (llm.llm_ok && llm.model_ok) {
       el.classList.remove('hidden');
       if (portField) portField.classList.remove('hidden');
-      el.textContent = `LLM${engine}: ${llm.model_ok ? 'модель найдена' : 'модель не найдена'}`;
+      el.textContent = `LLM${engine}: работает · порт ${llm.port || '—'}`;
       el.classList.remove('off');
       if (errBox) errBox.classList.add('hidden');
     } else if (!llm.model_ok) {
@@ -1698,7 +1853,7 @@ async function refreshLlmStatus() {
     } else {
       el.classList.remove('hidden');
       if (portField) portField.classList.remove('hidden');
-      el.textContent = `LLM${engine}: не обнаружен`;
+      el.textContent = `LLM${engine}: не запущен (модель установлена)`;
       el.classList.add('off');
       if (errBox) {
         document.getElementById('llm-error-text').textContent =
@@ -1733,18 +1888,23 @@ async function applyLlmPort(portArg) {
     if (btn) btn.disabled = false;
     if (data.ok) {
       document.getElementById('llm-error-box').classList.add('hidden');
-      document.getElementById('llm-status').textContent =
-        `LLM (${data.engine}): запущен на порту ${data.port}`;
       document.getElementById('llm-status').classList.remove('off');
+      document.getElementById('llm-status').textContent =
+        `LLM (${data.engine}): работает · порт ${data.port}`;
+      addLog(`✅ LLM работает на порту ${data.port}`);
+      refreshLlmStatus();
       return {ok: true, port: data.port};
     }
     document.getElementById('llm-error-text').textContent =
       data.error || 'Не удалось запустить LLM на этом порту.';
+    document.getElementById('llm-error-box').classList.remove('hidden');
+    addLog(`⚠ LLM: ${data.error || 'не удалось запустить'}`);
     return {ok: false, error: data.error};
   } catch (_) {
     if (btn) btn.disabled = false;
     document.getElementById('llm-error-text').textContent =
       'Ошибка соединения с сервером.';
+    document.getElementById('llm-error-box').classList.remove('hidden');
     return {ok: false, error: 'Ошибка соединения с сервером.'};
   }
 }
@@ -1752,6 +1912,10 @@ async function applyLlmPort(portArg) {
 document.addEventListener('DOMContentLoaded', init);
 
 document.getElementById('llm-port-apply')?.addEventListener('click', applyLlmPort);
+
+// Подвал сам обновляет статус LLM: движок мог стартовать/упасть без действий
+// пользователя — чтобы предупреждение не висело вечно и не вводило в заблуждение.
+setInterval(refreshLlmStatus, 5000);
 
 window.addEventListener('resize', () => syncFileListHeight());
 

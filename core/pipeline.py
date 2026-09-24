@@ -330,10 +330,26 @@ class AudioPipeline:
             from core import settings as settings_store
 
             st = settings_store.load()
-            model_name = st.get("whisper_model") or "base"
+            from core import asr_backends as ab
+
+            backend = st.get("asr_backend") or ab.DEFAULT_BACKEND
+            if not ab.is_backend(backend):
+                backend = ab.DEFAULT_BACKEND
+            entry = ab.find(backend)
+            model_label = entry["label"] if entry else backend
             device = "CPU"
             gpu_note = ""
-            if st.get("use_gpu", False):
+            if ab.kind_of(backend) == "gigaam":
+                from processing import gigaam
+
+                if gigaam.gigaam_deps_ok():
+                    dev = gigaam.get_device(bool(st.get("use_gpu", False)))
+                    device = "CUDA" if dev == "cuda" else "CPU"
+                    if st.get("use_gpu", False) and dev == "cpu":
+                        gpu_note = " (torch не нашёл CUDA — CPU)"
+                else:
+                    gpu_note = " (GigaAM не установлен)"
+            elif st.get("use_gpu", False):
                 if transcriber is not None:
                     reason = transcriber.gpu_probe()
                     if reason is None:
@@ -342,7 +358,7 @@ class AudioPipeline:
                         gpu_note = f" (GPU недоступен: {reason})"
                 else:
                     device = "CUDA"
-            emit(LogEvent(f"  Модель: {model_name} | Устройство: {device}{gpu_note}"))
+            emit(LogEvent(f"  Модель: {model_label} | Устройство: {device}{gpu_note}"))
 
             steps = list(self.steps)
             for i, step in enumerate(steps):

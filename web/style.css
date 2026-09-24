@@ -440,18 +440,24 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
 }
 .live-header {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-  row-gap: var(--sp-1);
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-1);
   padding: var(--sp-3) var(--sp-4);
 }
 .live-header h3 { font-size: var(--fs-label); font-weight: 500; color: var(--md-on-surface-variant); margin: 0; }
+.live-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  row-gap: var(--sp-1);
+}
 #enhance-btn {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-  padding: 6px var(--sp-3);
+  padding: 4px var(--sp-3);
   background: var(--md-tertiary-container);
   color: var(--md-on-tertiary-container);
   border-radius: var(--r-pill);
@@ -474,7 +480,7 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
 #enhance-status {
   display: inline-flex;
   align-items: center;
-  padding: 6px var(--sp-3);
+  padding: 4px var(--sp-3);
   background: var(--md-surface-container-high);
   color: var(--md-on-surface-variant);
   border-radius: var(--r-pill);
@@ -487,7 +493,7 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-  padding: 6px var(--sp-3);
+  padding: 4px var(--sp-3);
   background: var(--md-surface-container-high);
   color: var(--md-on-surface-variant);
   border-radius: var(--r-pill);
@@ -513,8 +519,8 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   background: var(--md-surface-container-high);
   color: var(--md-on-surface-variant);
@@ -529,15 +535,16 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   gap: var(--sp-1);
 }
 .live-actions button {
-  width: 36px;
-  height: 36px;
+  width: 26px;
+  height: 26px;
   align-items: center;
   justify-content: center;
   display: inline-flex;
   color: var(--md-on-surface-variant);
+  background: var(--md-surface-container-high);
   border-radius: var(--r-pill);
 }
-.live-actions button svg { width: 20px; height: 20px; fill: currentColor; }
+.live-actions button svg { width: 16px; height: 16px; fill: currentColor; }
 .live-actions button:hover { background: var(--md-surface-variant); color: var(--md-on-surface); }
 #enhance-progress {
   display: flex;
@@ -742,7 +749,6 @@ footer span:empty { display: none; }
   animation: modal-pop var(--dur-3) var(--ease-emph);
 }
 .logs-box {
-  width: 720px;
   height: 70vh;
 }
 .logs-box #log { flex: 1; min-height: 0; }
@@ -840,12 +846,31 @@ footer span:empty { display: none; }
 }
 .modal-checkbox input { width: 18px; height: 18px; accent-color: var(--md-primary); }
 .modal-checkbox input:disabled { opacity: .4; }
+.ai-check-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.ai-check-row .modal-checkbox { margin-bottom: 0; }
+.mini-btn {
+  padding: 4px var(--sp-2);
+  font-size: var(--fs-label);
+  font-weight: 500;
+  border-radius: var(--r-pill);
+  background: var(--md-surface-variant);
+  color: var(--md-on-surface-variant);
+  flex-shrink: 0;
+}
+.mini-btn:hover { background: var(--md-surface-container-highest); color: var(--md-on-surface); }
+.mini-btn.danger { background: var(--md-error-container, #f9dedc); color: var(--md-on-error-container, #410e0b); }
+.mini-btn.danger:hover { background: var(--md-error, #b3261e); color: var(--md-on-error, #ffffff); }
 .modal-note { font-size: var(--fs-label); color: var(--md-on-surface-variant); margin-top: var(--sp-2); }
 .modal-hint { font-size: var(--fs-label); color: var(--md-on-surface-variant); margin: -var(--sp-1) 0 var(--sp-2); }
 .modal-port-row { display: flex; gap: var(--sp-2); align-items: center; }
-.download-box { max-width: 440px; }
+/* Второстепенные модалки (подтверждение, скачивание) — уже основных */
+.modal-box.download-box,
+.modal-box.confirm-box { max-width: 420px; width: 90%; }
 .dl-label { margin-bottom: var(--sp-2); }
 .dl-pct { margin-top: var(--sp-2); font-size: var(--fs-label); color: var(--md-on-surface-variant); }
-.confirm-box { width: 420px; }
 .confirm-box .modal-body p { color: var(--md-on-surface); margin: var(--sp-2) 0; }
-.launch-box { max-width: 420px; }

@@ -10,17 +10,19 @@ DATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / "PromptEar"
 LOG_DIR = DATA_DIR / "logs"
 FIRST_RUN_FLAG = DATA_DIR / ".initialized"
 SETTINGS_FILE = DATA_DIR / "settings.json"
+# Флаг "открыть настройки при следующем старте" (ставится перед перезапуском
+# программы и снимается первым же /api/startup после него).
+SETTINGS_OPEN_FLAG = DATA_DIR / "open_settings.flag"
 TEMP_DIR: Final[Path] = BASE_DIR / "temp"
 
 # Кэши моделей внутри портативной папки (не BrokenCache WebView2 — диск)
 MODELS_DIR = BASE_DIR / "models"
 HF_HOME = MODELS_DIR / "hf"
-# huggingface_hub (SAGE-модель и метаданные) пишет в папку программы, а не в
+# huggingface_hub (метаданные/модели) пишет в папку программы, а не в
 # C:\Users\<user>\.cache\huggingface. setdefault — уважаем явный системный HF_HOME.
 os.environ.setdefault("HF_HOME", str(HF_HOME))
 CT2_CACHE = MODELS_DIR / "ct2"
 LLM_MODEL_DIR = MODELS_DIR / "llm"
-SAGE_MODEL_DIR = MODELS_DIR / "sage"
 LLAMA_DIR = BASE_DIR / "llama"
 
 # ── Output ──────────────────────────────────────────────────────────────────
@@ -47,7 +49,7 @@ PREPROCESS_LOWPASS_FREQ = 8000  # убирает ВЧ-шум (речь 300-4000 
 WHISPER_DEFAULT_MODEL = "base"
 
 # ── LLM-движок ──────────────────────────────────────────────────────────────
-LLM_ENGINE = "llama"  # "llama" | "sage"
+LLM_ENGINE = "llama"
 
 # ── llama.cpp (bin-win-cpu-x64.zip, llama-server.exe) ──────────────────────
 LLAMA_RELEASE = "b11034"  # версия релиза, см. github.com/ggml-org/llama.cpp/releases
@@ -70,9 +72,25 @@ GGUF_URL = (
     "gemma-4-E2B-it-UD-Q4_K_XL.gguf"
 )
 
-# ── SAGE (FRED-T5-1.7B, однопроходный корректор) ───────────────────────────
-SAGE_HF_REPO = "ai-forever/sage-v1.1.0"
-SAGE_MAX_CHARS = 1000  # вход T5 ≤512 токенов → чанк меньше LLM-чанка
+# Сборки llama.cpp (bin-win-cpu-x64.zip идёт в комплекте сборки приложения;
+# bin-win-cuda-13.4-x64.zip докачивается автоматически при включении GPU;
+# cudart-...·zip — CUDA-рантайм (cudart/cublas), без него ggml-cuda не грузится).
+def _llama_release_url(suffix: str) -> str:
+    return (
+        f"https://github.com/ggml-org/llama.cpp/releases/download/"
+        f"{LLAMA_RELEASE}/llama-{LLAMA_RELEASE}-{suffix}.zip"
+    )
+
+
+LLAMA_CPU_URL = _llama_release_url("bin-win-cpu-x64")
+LLAMA_CUDA_URL = _llama_release_url("bin-win-cuda-13.4-x64")
+LLAMA_CUDART_URL = (
+    f"https://github.com/ggml-org/llama.cpp/releases/download/"
+    f"{LLAMA_RELEASE}/cudart-llama-bin-win-cuda-13.4-x64.zip"
+)
+
+# Слоёв модели выгружаемых на GPU при ИИ-улучшении (ngl). Cpu-остаток ≈ 0.
+LLAMA_GPU_LAYERS = 99
 
 # ── Multi-pass enhancement ──────────────────────────────────────────────────
 MULTI_PASS_MIN_RATIO = 0.6
@@ -81,6 +99,13 @@ ENHANCER_CHUNK_SIZE = 3000  # symbols per chunk for long texts
 
 # ── GPU ─────────────────────────────────────────────────────────────────────
 NVIDIA_SMI_TIMEOUT = 5
+
+# ── Выгрузка моделей при простое ──────────────────────────────────────────
+MODEL_IDLE_TIMEOUT_SEC = 300  # 5 минут без обращений — гасим движки
+MODEL_IDLE_CHECK_SEC = 60  # как часто сторож проверяет простой
+# Нет прогресса транскрибации дольше — считаем зависшей (fail fast вместо
+# вечного спина). Чанк/сегмент идут секундами даже на CPU, запас огромный.
+TRANSCRIBE_STALL_TIMEOUT_SEC = 600
 
 # ── Error messages ──────────────────────────────────────────────────────────
 ERROR_MESSAGES = {
