@@ -20,9 +20,11 @@ import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from threading import Event
 from typing import Any
+from unittest import mock
 
 from config import BASE_DIR, MODEL_IDLE_CHECK_SEC, MODEL_IDLE_TIMEOUT_SEC, TEMP_DIR
 from core import gigaam_models as gm
@@ -68,6 +70,30 @@ def _ensure_ffmpeg_in_path() -> None:
         cur = os.environ.get("PATH", "")
         if str(BASE_DIR) not in cur.split(os.pathsep):
             os.environ["PATH"] = str(BASE_DIR) + os.pathsep + cur
+
+
+@contextlib.contextmanager
+def _hidden_child_consoles() -> Iterator[None]:
+    """Гасит вспышки консолей от вендорного кода.
+
+    load_audio() из modeling_gigaam.py спавнит ffmpeg через голый
+    subprocess.run БЕЗ CREATE_NO_WINDOW — каждое окно вспыхивает консолью
+    (по одному на чанк). Подменяем Popen на время транскрибации, добавляя
+    флаг (только Windows; явно заданные флаги уважаем и дополняем).
+    """
+    if os.name != "nt":
+        yield
+        return
+    orig_popen = subprocess.Popen
+
+    def _popen_no_window(*args: Any, **kwargs: Any) -> Any:
+        kwargs["creationflags"] = (kwargs.get("creationflags") or 0) | (
+            subprocess.CREATE_NO_WINDOW
+        )
+        return orig_popen(*args, **kwargs)
+
+    with mock.patch.object(subprocess, "Popen", new=_popen_no_window):
+        yield
 
 
 def _load_engine(variant: str, device: str) -> Any:
@@ -270,28 +296,31 @@ def transcribe_with_segments(
 
     with _engine_lock:
         _engine_inflight.add(key)
-    try:
-        if duration <= LONGFORM_LIMIT:
-            run_single(audio_path, 0.0, duration)
-        else:
-            chunks = _chunks(duration, ffmpeg, audio_path, tmp_dir)
-            total = len(chunks)
-            get_logger().info(f"  Нарезка: {total} чанков по ≤{CHUNK_SECONDS}с")
-            for i, chunk in enumerate(chunks):
-                if cancel is not None and cancel.is_set():
-                    break
-                start = i * CHUNK_SECONDS
-                end = min(start + CHUNK_SECONDS, duration)
-                run_single(chunk, start, end)
-                if (i + 1) % 10 == 0 or i + 1 == total:
-                    get_logger().info(f"  Чанк {i + 1}/{total}...")
-                chunk.unlink(missing_ok=True)
-    finally:
-        with _engine_lock:
-            _engine_inflight.discard(key)
-        import shutil
+    # Вендорный load_audio внутри engine.transcribe спавнит ffmpeg без
+    # CREATE_NO_WINDOW — прячем консоли на время всей транскрибации.
+    with _hidden_child_consoles():
+        try:
+            if duration <= LONGFORM_LIMIT:
+                run_single(audio_path, 0.0, duration)
+            else:
+                chunks = _chunks(duration, ffmpeg, audio_path, tmp_dir)
+                total = len(chunks)
+                get_logger().info(f"  Нарезка: {total} чанков по ≤{CHUNK_SECONDS}с")
+                for i, chunk in enumerate(chunks):
+                    if cancel is not None and cancel.is_set():
+                        break
+                    start = i * CHUNK_SECONDS
+                    end = min(start + CHUNK_SECONDS, duration)
+                    run_single(chunk, start, end)
+                    if (i + 1) % 10 == 0 or i + 1 == total:
+                        get_logger().info(f"  Чанк {i + 1}/{total}...")
+                    chunk.unlink(missing_ok=True)
+        finally:
+            with _engine_lock:
+                _engine_inflight.discard(key)
+            import shutil
 
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
     text = " ".join(parts).strip()
     if not segments:
         segments = [Segment(start=0.0, end=duration, text=text)]
