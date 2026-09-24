@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Сборка единого CPU-дистрибутива PromptEar.
+"""Сборка единого дистрибутива PromptEar.
 
 Запуск: python build_zips.py
 
 Zip содержит:
   - Исходный код (web/, core/, processing/, utils/, assets/)
   - bootstrap.bat, run.bat, run.pyw, main.py, config.py, requirements.txt
-  - wheels/ — torch (CPU), torchaudio и все зависимости (pip download)
+  - wheels/ — все зависимости Python (pip download), кроме torch: он ставится
+    только при включении движка GigaAM (см. core/downloader._run_gigaam_deps)
   - ffmpeg.exe, llama.cpp (win-cpu)
-  - Модель Whisper base (встроена в models/ct2, остальные качаются на лету)
+  - Модель Whisper base (встроена в models/ct2, остальные качаются на лету).
+  - GigaAM (~428 МБ) и Gemma GGUF (~3 ГБ) НЕ вшиваются — докачиваются из
+    приложения при первом включении.
 """
 
 import os
@@ -21,7 +24,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
+REDIST_VERSION = "0.16.0"
 
 SOURCE_FILES = [
     "main.py",
@@ -45,8 +48,6 @@ SOURCE_DIRS = [
 EXCLUDE_SUFFIXES = {".pyc", ".pyo"}
 EXCLUDE_DIRS = {"__pycache__", ".git", ".github", ".pytest_cache", ".ruff_cache"}
 
-TORCH_PACKAGES = ["torch", "torchaudio"]
-
 PIP_PACKAGES = [
     "flask",
     "pywebview",
@@ -56,6 +57,9 @@ PIP_PACKAGES = [
     "Pillow",
     "python-docx",
     "requests",
+    "transformers==4.57.1",
+    "huggingface-hub",
+    "setuptools",
 ]
 
 FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
@@ -66,32 +70,6 @@ def _excluded(path: Path, rel: Path) -> bool:
         if part in EXCLUDE_DIRS:
             return True
     return rel.suffix in EXCLUDE_SUFFIXES
-
-
-def _pip_download_torch(dest: Path) -> None:
-    """Скачивает torch + torchaudio (CPU) с зависимостями из CPU-индекса."""
-    tmpdir = str(dest.parent / "_pip_temp")
-    os.makedirs(tmpdir, exist_ok=True)
-    env = {**os.environ, "TEMP": tmpdir, "TMP": tmpdir}
-    cmd = [
-        sys.executable,
-        "-m",
-        "pip",
-        "download",
-        *TORCH_PACKAGES,
-        "--index-url",
-        TORCH_INDEX,
-        "--trusted-host",
-        "download.pytorch.org",
-        "--only-binary=:all:",
-        "-d",
-        str(dest),
-    ]
-    print(f"  pip download torch (cpu) -> {dest}")
-    subprocess.run(cmd, check=True, env=env)
-    whls = list(dest.glob("*.whl"))
-    print(f"  Скачано {len(whls)} wheel-файлов "
-          f"({sum(f.stat().st_size for f in whls) / 1024 / 1024:.0f} MB)")
 
 
 def _pip_download_packages(dest: Path) -> None:
@@ -168,8 +146,8 @@ def _download_llama_cpp(dest: Path) -> None:
     zip_path.unlink()
 
 
-def _embed_whisper_tiny(dest: Path) -> None:
-    """Встраивает самую лёгкую модель Whisper (base) в dest/models/ct2."""
+def _embed_whisper_base(dest: Path) -> None:
+    """Встраивает базовую модель Whisper (base) в dest/models/ct2."""
     from core.downloader import download_whisper_model
 
     alias = "base"
@@ -186,7 +164,7 @@ def _embed_whisper_tiny(dest: Path) -> None:
 def build_dist() -> None:
     build_dir = ROOT / "_build_cpu"
     wheels_dir = build_dir / "wheels"
-    zip_path = ROOT / "PromptEar-v0.13.0-cpu.zip"
+    zip_path = ROOT / f"PromptEar-v{REDIST_VERSION}.zip"
 
     # Очистка
     if build_dir.exists():
@@ -194,8 +172,8 @@ def build_dist() -> None:
     build_dir.mkdir(parents=True)
     wheels_dir.mkdir()
 
-    # 1. Скачать wheels (torch CPU из variant-индекса, остальное из PyPI)
-    _pip_download_torch(wheels_dir)
+    # 1. Скачать wheels (торч не нужен — GigaAM ставит его сам при включении;
+    #    всё остальное из PyPI)
     _pip_download_packages(wheels_dir)
 
     # 2. Скопировать исходники
@@ -254,7 +232,7 @@ def build_dist() -> None:
 
     # 5. Встроить llama.cpp и модель Whisper base
     _download_llama_cpp(build_dir)
-    _embed_whisper_tiny(build_dir)
+    _embed_whisper_base(build_dir)
 
     # 6. Создать zip
     print(f"  Создание {zip_path.name}...")

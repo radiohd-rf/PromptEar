@@ -1,6 +1,6 @@
 # PromptEar
 
-![Version](https://img.shields.io/badge/version-0.13.0-blue)
+![Version](https://img.shields.io/badge/version-0.16.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078d7)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Privacy](https://img.shields.io/badge/privacy-100%25_local-brightgreen)
@@ -8,7 +8,7 @@
 > Устали вручную расшифровывать интервью или переслушивать лекции?  
 > PromptEar делает это за вас — полностью локально, за пару кликов.
 >
-> **Скачать:** [CPU (GitHub Releases)](https://github.com/radiohd-rf/PromptEar/releases/latest) · [GPU (Яндекс.Диск)](https://disk.yandex.ru/d/7YLfrrD35gmoxQ)
+> **Скачать:** [Последний релиз (GitHub Releases)](https://github.com/radiohd-rf/PromptEar/releases/latest)
 
 ## Демонстрация
 
@@ -25,34 +25,39 @@
 
 - Drag-and-drop аудио (MP3, WAV, FLAC, OGG, M4A, AAC, WMA) и **видео** (MP4, AVI, MKV, MOV, WEBM, WMV)
 - Автоматическое извлечение аудиодорожки из видео (встроенный ffmpeg)
-- Распознавание речи через **faster-whisper** (CPU или CUDA)
-- 3-проходное улучшение текста через **llama.cpp** (встроенный llama-server): очистка → грамматика/стиль → структура абзацев
+- Распознавание речи: **Whisper** (faster-whisper, CPU или CUDA) или **GigaAM v3** (лучшая точность для русского)
+- 3-проходное улучшение текста через **llama.cpp** (встроенный llama-server + модель Gemma): очистка → грамматика/стиль → структура абзацев
 - Режимы улучшения: **Авто**, **Спросить**, **Без** — с живой трансляцией результата
+- Перевод результата на любой язык (Gemma)
 - Автоопределение темы разговора
+- Тайм-коды [MM:SS] в тексте
 - Сохранение в **TXT**, **MD**, **DOCX**, **SRT** или **VTT**
 - Компрессия тихих записей (ffmpeg)
 - Тёмная/светлая тема интерфейса
 - Остановка обработки в любой момент
 
-## Быстрый старт (CPU)
+## Быстрый старт
 
-1. Скачать `PromptEar-v0.13.0-cpu.zip` со страницы [релизов](https://github.com/radiohd-rf/PromptEar/releases)
+1. Скачать `PromptEar-v0.16.0.zip` со страницы [релизов](https://github.com/radiohd-rf/PromptEar/releases)
 2. Распаковать в любую папку
 3. Запустить `Запустить PromptEar.exe`
-4. Дождаться установки (bootstrap — 1 раз, скачает модели ~1.5 GB)
-5. Перетащить аудиофайлы в окно → нажать «Обработать»
+4. Дождаться установки (bootstrap — 1 раз)
+5. Перетащить аудиофайлы в окно → выбрать параметры → «Запустить»
 
-Требуется: **llama.cpp** (`llama-server`) с локальной LLM-моделью (табличное скачивание при первом запуске).
+Требуется: Windows 10/11, ~1 ГБ свободного места + место под модели.
 
-## GPU версия (CUDA)
+### Модели
 
-Для видеокарт NVIDIA:
+- **Whisper base** — предустановлена в сборке (транскрибация работает сразу)
+- **GigaAM v3** (~428 МБ) — для русского, докачивается из приложения при выборе
+- **Gemma (GGUF, ~3 ГБ)** — для ИИ-улучшения и перевода, докачивается при первом включении ИИ
 
-- **Скачать:** [Яндекс.Диск](https://disk.yandex.ru/d/7YLfrrD35gmoxQ) — пароль: `PromptEar`
-- Всё остальное так же, как в CPU версии
+Все модели скачиваются и хранятся внутри папки приложения.
 
-Размер: ~2.5 GB (torch с CUDA 12.6).  
-Ускорение: в 3-5x быстрее CPU.
+### GPU (NVIDIA)
+
+Та же единая сборка. В настройках включите **«Использовать GPU»** — транскрибация и
+ИИ-улучшение пойдут через видеокарту (CUDA). Без NVIDIA всё работает на CPU.
 
 ## Архитектура
 
@@ -63,8 +68,8 @@
            └─ PyWebView (нативное окно)
                 └─ веб-интерфейс (Flask + SSE)
                      ├─ Drag-and-drop файлов
-                     ├─ Whisper → распознавание
-                     ├─ llama.cpp → 3-pass улучшение
+                     ├─ Whisper / GigaAM → распознавание
+                     ├─ llama.cpp → 3-проходное улучшение + перевод
                      └─ TXT/MD/DOCX/SRT/VTT → сохранение
 ```
 
@@ -76,8 +81,11 @@
 | `web/server.py` | Flask + SSE события (лог, прогресс, статус) |
 | `web/index.html` | Интерфейс drag-and-drop |
 | `config.py` | Единый конфиг: пути, модель, таймауты |
-| `processing/transcriber.py` | Whisper + прогресс-коллбек |
-| `processing/enhancer.py` | llama.cpp + SAGE: 3-проходное улучшение, режимы Авто/Спросить/Без |
+| `core/asr_backends.py` | Каталог движков распознавания (Whisper / GigaAM v3) |
+| `core/whisper_models.py`, `core/gigaam_models.py` | Каталоги и установка моделей |
+| `core/downloader.py` | Скачивание моделей с прогрессом |
+| `processing/transcriber.py` | Whisper / GigaAM + прогресс-коллбек |
+| `processing/enhancer.py` | llama.cpp: 3-проходное улучшение, перевод, idle-выгрузка |
 | `core/detector.py` | Анализ громкости, препроцессинг ffmpeg |
 | `build_zips.py` | Сборка zip-дистрибутива (pip download wheels, лаунчер с иконкой) |
 
@@ -86,23 +94,20 @@
 | Компонент | Технология |
 |-----------|-----------|
 | Окно | PyWebView (Microsoft Edge WebView2) |
-| Сервер | Flask + Server-Sent Events |
-| Распознавание | faster-whisper (CTranslate2) |
-| Улучшение текста | llama.cpp (llama-server) + SAGE (T5) |
+| Сервер | Flask + Waitress + Server-Sent Events |
+| Распознавание | faster-whisper (CTranslate2), GigaAM v3 |
+| Улучшение текста | llama.cpp (llama-server) + Gemma GGUF |
 | Лаунчер | C# (.NET Framework) |
 | Сборка | build_zips.py + pip download |
 
 ## Сборка из исходников
 
 ```bash
-# CPU
-python build_zips.py cpu
-
-# CUDA
-python build_zips.py cu126
+python build_zips.py
 ```
 
-Требуется Python 3.12. На выходе — готовый zip с wheel-файлами torch.
+Требуется Python 3.10+ и интернет. На выходе — `PromptEar-v0.16.0.zip`
+с wheel-файлами зависимостей, ffmpeg, llama.cpp и моделью Whisper base.
 
 ## Лицензия
 

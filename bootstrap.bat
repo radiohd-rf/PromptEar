@@ -71,24 +71,21 @@ echo [4/6] Installing libraries...
 
 if exist "%APP_DIR%wheels\*.whl" (
     echo   Installing from local wheels...
-    "%PIP%" install --no-index --find-links "%APP_DIR%wheels" torch torchaudio flask pywebview faster-whisper Pillow python-docx requests --quiet --no-cache-dir || (
+    "%PIP%" install --no-index --find-links "%APP_DIR%wheels" flask pywebview waitress faster-whisper nvidia-cublas-cu12 Pillow python-docx requests "transformers==4.57.1" huggingface-hub --quiet --no-cache-dir || (
         echo   ERROR: pip install failed.
-        echo   Run manually: "%PIP%" install --no-index --find-links "%APP_DIR%wheels" torch torchaudio flask pywebview faster-whisper Pillow python-docx requests
+        echo   Run manually: "%PIP%" install --no-index --find-links "%APP_DIR%wheels" flask pywebview waitress faster-whisper nvidia-cublas-cu12 Pillow python-docx requests "transformers==4.57.1" huggingface-hub
         pause
         exit /b 1
     )
 ) else (
     echo   No local wheels found, installing from PyPI...
-    "%PIP%" install torch torchaudio --index-url https://download.pytorch.org/whl/cpu --quiet --no-cache-dir || (
-        echo   Warning: torch install failed
-    )
-    "%PIP%" install flask pywebview faster-whisper Pillow python-docx requests --quiet --no-cache-dir || (
+    "%PIP%" install flask pywebview waitress faster-whisper nvidia-cublas-cu12 Pillow python-docx requests --quiet --no-cache-dir || (
         echo   Warning: some packages failed to install
     )
 )
-"%PIP%" install transformers huggingface-hub --quiet --no-cache-dir
+"%PIP%" install "transformers==4.57.1" huggingface-hub --quiet --no-cache-dir
 if %errorlevel% neq 0 (
-    echo   Warning: transformers not installed (SAGE engine disabled).
+    echo   Warning: transformers not installed (GigaAM engine disabled).
 )
 
 echo   Libraries installed
@@ -144,10 +141,10 @@ if exist "%APP_DIR%llama\llama-server.exe" (
 
 :: Check model
 echo   Checking whisper model...
-if exist "%APP_DIR%models\ct2\tiny\model.bin" (
-    echo   Whisper tiny found
+if exist "%APP_DIR%models\ct2\base\model.bin" (
+    echo   Whisper base found
 ) else (
-    echo   Whisper tiny not embedded — will be downloaded on first run.
+    echo   Whisper base not embedded — will be downloaded on first run.
 )
 
 :: ---------------------------------------------------------------
@@ -158,7 +155,7 @@ echo === Setup complete! ===
 echo.
 echo Virtual env: %VENV_DIR%
 echo LLM engine:  llama.cpp (llama-server)
-echo Whisper:     tiny (embedded), others download on demand
+echo Whisper:     base (embedded), GigaAM and Gemma download on demand
 echo.
 echo Run: run.bat
 echo.
