@@ -166,7 +166,17 @@ header {
   user-select: none;
   -webkit-app-region: drag;
 }
-header h1 { font-size: 24px; font-weight: 600; margin: 0; letter-spacing: .1px; padding-left: var(--sp-4); }
+header h1 {
+  font-size: 24px;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: .1px;
+  padding-left: var(--sp-4);
+  background: linear-gradient(90deg, var(--md-secondary), var(--md-primary) 50%, var(--md-tertiary));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
 
 #header-actions {
   margin-left: var(--sp-3);
