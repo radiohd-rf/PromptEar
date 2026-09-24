@@ -900,15 +900,29 @@ def models_catalog():
         entry = dict(entry)
         entry["installed"] = ab.is_installed(entry["id"])
         backends.append(entry)
+    gigaam_ready = gigaam_engine.gigaam_deps_ok()
+
+    def _usable(bid: str) -> bool:
+        """Рабочий ли бэкенд: whisper — модель на месте, gigaam — ещё и deps."""
+        if not ab.is_backend(bid):
+            return False
+        if not ab.is_installed(bid):
+            return False
+        return ab.kind_of(bid) != "gigaam" or gigaam_ready
+
     current = settings_store.load().get("asr_backend")
-    if not (isinstance(current, str) and ab.is_backend(current)):
+    # Сохранённый бэкенд может быть не рабочим на свежей копии (например,
+    # gigaam_e2e_rnnt без установленных torch/pyannote). Не тащим «мёртвый»
+    # выбор в UI — отдаём установленный или дефолтный, иначе пайплайн падает
+    # с ошибкой вида «GigaAM не установлен».
+    if not isinstance(current, str) or not _usable(current):
         current = ab.installed_backend() or ab.DEFAULT_BACKEND
     return jsonify(
         {
             "backends": backends,
             "current": current,
             "installed": ab.installed_backend(),
-            "gigaam_deps_ok": gigaam_engine.gigaam_deps_ok(),
+            "gigaam_deps_ok": gigaam_ready,
             "gemma_installed": LLM_MODEL_PATH.exists(),
         }
     )

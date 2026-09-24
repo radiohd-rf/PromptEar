@@ -16,6 +16,9 @@ llama_server.pid
 # Runtime temp (файлы обработки/скачивания — внутри папки программы)
 temp/
 
+# Runtime data (настройки и логи приложения — портативный каталог данных)
+data/
+
 # Build artifacts
 dist/
 build/

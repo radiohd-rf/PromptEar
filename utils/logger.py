@@ -1,11 +1,10 @@
 """Логирование в файл с ротацией."""
 
 import logging
-import os
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 
-LOG_DIR = Path(os.environ.get("APPDATA", Path.home())) / "PromptEar" / "logs"
+from config import LOG_DIR
+
 LOG_FILE = LOG_DIR / "app.log"
 MAX_BYTES = 1_048_576  # 1 MB
 BACKUP_COUNT = 3

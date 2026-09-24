@@ -23,7 +23,7 @@ if not defined SILENT (
     echo   2 — Кеш Whisper (%%APP_DIR%%\models\hf)         [ДА]
     echo   3 — Модели LLM (%%APP_DIR%%\models\llm, sage)   [НЕТ]
     echo   4 — llama.cpp (%%APP_DIR%%\llama)                [НЕТ]
-    echo   5 — Настройки и логи (%%APPDATA%%\PromptEar)    [ДА]
+    echo   5 — Настройки и логи (%%APP_DIR%%\data)              [ДА]
     echo.
     echo   0 — Выход без удаления
     echo.
@@ -114,8 +114,8 @@ if defined DO_LLAMA (
 :: ── 5. Настройки и логи ─────────────────────────────────────────────
 if defined DO_SETTINGS (
     echo   [5] Удаление настроек и логов...
-    if exist "%APPDATA%\PromptEar" (
-        rmdir /s /q "%APPDATA%\PromptEar"
+    if exist "%APP_DIR%data" (
+        rmdir /s /q "%APP_DIR%data"
     )
 ) else (
     echo   [5] Пропущено

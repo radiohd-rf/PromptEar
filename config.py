@@ -6,7 +6,9 @@ from typing import Final
 
 # ── Пути данных ─────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / "PromptEar"
+# Настройки и логи хранятся в папке приложения (портативность): скопировал
+# папку — настройки, модели и кеши приехали с ней. В %APPDATA% ничего не пишем.
+DATA_DIR = BASE_DIR / "data"
 LOG_DIR = DATA_DIR / "logs"
 FIRST_RUN_FLAG = DATA_DIR / ".initialized"
 SETTINGS_FILE = DATA_DIR / "settings.json"
