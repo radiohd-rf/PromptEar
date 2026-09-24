@@ -12,7 +12,7 @@ import os
 import winreg
 from pathlib import Path
 
-DEFAULT_SEED = 0xFF4FC3F7  # текущий акцент PromptEar
+DEFAULT_SEED = 0xFF7C6FF0  # фиолетовый M3-акцент — новый seed палитры
 
 # M3: роль -> требуемый tone (target light/dark).
 ROLE_TONES = {
@@ -32,17 +32,17 @@ ROLE_TONES = {
     "on-error": (100, 20),
     "error-container": (90, 30),
     "on-error-container": (10, 90),
-    "surface": (98, 6),
-    "on-surface": (10, 90),
+    "surface": (98, 10),
+    "on-surface": (10, 88),
     "surface-variant": (90, 30),
     "on-surface-variant": (30, 80),
     "outline": (50, 60),
     "outline-variant": (80, 30),
-    "surface-container-lowest": (100, 4),
-    "surface-container-low": (96, 10),
-    "surface-container": (94, 12),
-    "surface-container-high": (92, 17),
-    "surface-container-highest": (90, 22),
+    "surface-container-lowest": (100, 6),
+    "surface-container-low": (96, 14),
+    "surface-container": (94, 17),
+    "surface-container-high": (92, 21),
+    "surface-container-highest": (90, 26),
 }
 
 NEUTRAL_SAT = 0.045  # нейтральные роли почти ахроматичны (M3 neutral palette)
@@ -117,17 +117,12 @@ def _dwm_accent() -> int | None:
 
 
 def seed_color() -> tuple[int, str]:
-    """Возвращает (seed_argb, источник): dwm | wallpaper | default."""
-    acc = _dwm_accent()
-    if acc is not None:
-        return acc, "dwm"
-    wp = _wallpaper_path()
-    if wp:
-        dom = _dominant_color(wp)
-        if dom is not None:
-            return dom, "wallpaper"
+    """Всегда фиксированный акцент PromptEar (системный акцент Windows игнорируем)."""
     return DEFAULT_SEED, "default"
 
+def _dwm_accent_old() -> int | None:
+    """только для справки — больше не используется."""
+    return _dwm_accent()
 
 # ── Упрощённая tonal palette (fallback-HCT) ───────────────────────
 

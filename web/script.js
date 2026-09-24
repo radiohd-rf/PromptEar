@@ -28,6 +28,7 @@ const fileStatuses = {};   // имя -> status
 const fileTexts = {};      // имя -> последний текст (черновик/улучшенный)
 const fileBadges = {};     // имя -> бейдж
 const fileTranslations = {}; // имя -> {lang, text, outputPath} — последний перевод
+const fileChecked = {};    // имя -> отмечен ли галочкой для транскрибации
 let translateBusy = false;  // идёт перевод («Переводим…»)
 let translateError = '';    // текст ошибки последнего перевода
 let translateAbort = null;  // AbortController активного перевода
@@ -139,12 +140,22 @@ function formatSize(n) {
 function openModal(id) { document.getElementById(id).style.display = 'flex'; }
 function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 
+function openAlertModal() { openModal('alert-overlay'); }
+function closeAlertModal() { closeModal('alert-overlay'); }
+
 function openLaunchModal() {
+  if (files.length === 0) {
+    openAlertModal();
+    return;
+  }
   fillModal('launch-overlay');
   openModal('launch-overlay');
   document.getElementById('launch-apply').focus();
 }
 function closeLaunchModal() { closeModal('launch-overlay'); }
+
+function openAlertModal() { openModal('alert-overlay'); }
+function closeAlertModal() { closeModal('alert-overlay'); }
 
 async function openSettingsModal() {
   await refreshModels();          // свежий статус модели ИИ → кнопка «Удалить модель» актуальна
@@ -462,7 +473,14 @@ async function refreshModels() {
     gigaamDepsOk = !!data.gigaam_deps_ok;
     if (data.current) appSettings.asr_backend = data.current;
     syncEnhanceButton();
+    syncAiDeleteBtn();
   } catch (_) {}
+}
+
+// Кнопка «Удалить модель» — только когда модель ИИ установлена.
+function syncAiDeleteBtn() {
+  const btn = document.getElementById('ai-delete-row-btn');
+  if (btn) btn.style.display = gemmaInstalled ? '' : 'none';
 }
 
 async function refreshSettings() {
@@ -606,6 +624,7 @@ function addFiles(fileList) {
       fileStatuses[f.name] = 'queued';
       fileTexts[f.name] = '';
       fileBadges[f.name] = 'Черновик';
+      fileChecked[f.name] = true;
     }
   }
   renderFileList();
@@ -623,6 +642,7 @@ function removeFile(idx) {
   delete fileTexts[name];
   delete fileBadges[name];
   delete fileTranslations[name];
+  delete fileChecked[name];
   files.splice(idx, 1);
   if (currentFileName === name) currentFileName = null;
   if (userPinnedFile === name) userPinnedFile = null;
@@ -650,10 +670,14 @@ function renderFileList() {
 
   list.innerHTML = files.map((f, i) => {
     const st = fileStatuses[f.name] || 'queued';
-    const clickable = st !== 'queued';
-    const selected = f.name === currentFileName && clickable;
-    return `<li class="file-item ${clickable ? 'clickable' : ''} ${selected ? 'selected' : ''}"
+    const selected = f.name === currentFileName;
+    const checked = fileChecked[f.name] !== false;
+    return `<li class="file-item ${selected ? 'selected' : ''}"
       data-name="${escapeHtml(f.name)}" onclick="selectFile('${escapeJs(f.name)}')">
+      <input type="checkbox" class="file-check" ${checked ? 'checked' : ''}
+        onchange="toggleFileCheck('${escapeJs(f.name)}', this.checked)"
+        onclick="event.stopPropagation()"
+        title="Транскрибировать файл" aria-label="Транскрибировать файл">
       <span class="file-num">${i + 1}.</span>
       <span class="file-name">${escapeHtml(f.name)}</span>
       <span class="file-size">${formatSize(f.size)}</span>
@@ -661,11 +685,31 @@ function renderFileList() {
       <span class="remove" onclick="event.stopPropagation(); removeFile(${i})" title="Убрать из списка" aria-label="Убрать из списка">✕</span>
     </li>`;
   }).join('');
+  updateSelectAll();
   syncResultActions();
 }
 
+function toggleFileCheck(name, checked) {
+  fileChecked[name] = checked;
+  updateSelectAll();
+}
+
+function setAllChecked(checked) {
+  for (const f of files) fileChecked[f.name] = checked;
+  renderFileList();
+}
+
+function updateSelectAll() {
+  const all = document.getElementById('file-select-all');
+  if (!all) return;
+  let cnt = 0;
+  for (const f of files) if (fileChecked[f.name] !== false) cnt++;
+  all.checked = files.length > 0 && cnt === files.length;
+  all.indeterminate = files.length > 0 && cnt > 0 && cnt < files.length;
+}
+
 function selectFile(name) {
-  if (!fileStatuses[name] || fileStatuses[name] === 'queued') return;
+  if (!files.some(f => f.name === name)) return;
   currentFileName = name;
   userPinnedFile = name;
   renderFileList();
@@ -848,8 +892,12 @@ async function runPipeline() {
   }
 
   const p = launchParams && launchParams.asr_backend ? launchParams : appSettings;
+  // Галочки: отмеченные файлы транскрибируются, снятые — пропускаются.
+  // Если не отмечен ни один — обрабатываем все.
+  let selected = files.filter(f => fileChecked[f.name] !== false);
+  if (selected.length === 0) selected = files;
   const formData = new FormData();
-  for (const f of files) {
+  for (const f of selected) {
     formData.append('files', f);
   }
   formData.append('ai', p.ai_enabled ? '1' : '0');
@@ -869,9 +917,9 @@ async function runPipeline() {
   resetResult();
   showLivePanel();
 
-  // сбросить статусы у выбранных файлов
+  // сбросить статусы: выбранные — в очередь, снятые — «Пропущено»
   for (const f of files) {
-    fileStatuses[f.name] = 'queued';
+    fileStatuses[f.name] = selected.includes(f) ? 'queued' : 'skipped';
     fileTexts[f.name] = '';
     fileBadges[f.name] = 'Черновик';
   }
@@ -954,21 +1002,12 @@ function handleEvent(msg) {
     case 'enhancing':
       showEnhanceProgress(msg.active_pass, msg.total_passes);
       if (msg.active_pass === 1) {
-        // Проход 1 начался: черновик whisper должен быть допечатан.
-        // Если whisper уже доложил весь текст, но печать не успела —
-        // плавно добираем оставшееся, а не показываем резко.
+        // Проход 1 начался: черновик whisper уже показан мгновенно —
+        // просто выравниваем окно по полному тексту.
         const el = document.getElementById('result-text');
         const draft = fileTexts[liveFile] || '';
-        if (draft && typingStarted && typeTarget && draft.length > Math.max(typeShownLen, el.textContent.length)) {
-          typeTarget = draft;
-          typeFinishing = true;
-          startTypingTimer();
-        } else {
-          resetTyping();
-          el.textContent = draft;
-          el.scrollTop = el.scrollHeight;
-        }
-
+        el.textContent = draft;
+        el.scrollTop = el.scrollHeight;
       } else if (lastPassText != null) {
         // предыдущий проход завершён — его полный текст мы уже получили,
         // плавно переходим: мигание → затухание → появление
@@ -1093,8 +1132,8 @@ function setLiveFile(name) {
     } else {
       setResultText(text, improved);
     }
+    renderFileList();
   }
-  renderFileList();
 }
 
 // Следовать ли окну за событием файла: да, если пользователь явно не
@@ -1153,149 +1192,32 @@ function closeHelp() {
   document.getElementById('help-overlay').style.display = 'none';
 }
 
-/* ── Печать текста в лайве (плавная, без видимых пауз) ──
-   Скорость = средний темп прихода текста с начала потока (стабильный, сам
-   уточняется каждым батчем). У конца имеющихся данных печать плавно
-   замедляется («тормозит»), растягивая остаток на паузу, пока whisper
-   генерирует следующий сегмент — видимых остановок нет. На final событии
-   текст показывается мгновенно. */
+/* ── Отображение текста в лайве ──
+   Текст показывается как приходит от модели (батчи whisper, финалы) —
+   мгновенно, без анимации печати. */
 
-let typeTimer = null;
-let typeTarget = null;
-let typeShownLen = 0;     // сколько символов уже показано (дробное)
-let emaRate = null;       // chars/ms — средний темп прихода с старта потока
-let typingStarted = false;
-let streamStartAt = 0;    // момент прихода первого текста
-let typeFinishing = false; // пришёл final — добираем оставшийся хвост быстро, но плавно
-let pendingText = null;    // следующий проход геммы ждёт, пока текущий допечатается
-let pendingPass = null;    // «Проход N/M» ждёт, пока текущий текст допечатается
 let lastPassText = null;   // полный текст последнего полученного прохода геммы
-
-const TYPE_TICK_MS = 16;   // тик ~60 Гц
-const BASE_RATE = 0.014;   // chars/ms пока нет данных — печатная скорость ~14 с/с
-const MAX_RATE = 0.03;     // верхняя граница (30 симв/с)
-const FINISH_DURATION_MS = 400; // за сколько добирать хвост при смене прохода (~0.4 сек)
 
 function setStreamingText(text) {
   const el = document.getElementById('result-text');
-  const shown = el.textContent;
-  // поток нарастает — это продолжение текущей выдачи
-  if (typeTarget && text.startsWith(shown) && text.length >= shown.length) {
-    const now = performance.now();
-    typeTarget = text;
-    if (!typingStarted) {
-      // первый батч: начало потока, печатаем сразу с базовой скоростью
-      typingStarted = true;
-      streamStartAt = now;
-      typeShownLen = 0;
-      startTypingTimer();
-      return;
-    }
-    // уточняем средний темп по всему потоку (не дёргается от пауз между сегментами)
-    const elapsed = now - streamStartAt;
-    if (elapsed > 1500) {
-      emaRate = Math.max(BASE_RATE, Math.min(MAX_RATE, text.length / elapsed));
-    }
-    if (typeShownLen < text.length && !typeTimer) startTypingTimer();
-    return;
-  }
-  // новый поток (или текст сброшен) — начинаем сначала.
-  // Но если печатается предыдущая версия и это новый проход геммы —
-  // добираем текущую быстро (finishing), новую печатаем после.
-  if (pendingText) {
-    pendingText = text;
-    return;
-  }
-  if (typingStarted && typeTarget && typeShownLen < typeTarget.length) {
-    pendingText = text;
-    typeFinishing = true;
-    startTypingTimer();
-    return;
-  }
-  resetTyping();
-  el.textContent = '';
-  if (text.length > 0) {
-    typeTarget = text;
-    typingStarted = true;
-    streamStartAt = performance.now();
-    typeShownLen = 0;
-    startTypingTimer();
-  }
-}
-
-function startTypingTimer() {
-  stopTyping();
-  typeTimer = setInterval(typeTick, TYPE_TICK_MS);
-}
-
-function typeTick() {
-  const tgt = typeTarget;
-  if (!tgt) { stopTyping(); return; }
-  let rate = emaRate != null ? emaRate : BASE_RATE;
-  const backlog = tgt.length - typeShownLen;
-  if (typeFinishing) {
-    // смена прохода: добираем оставшееся за ~0.4 сек независимо от размера
-    if (backlog > 1) rate = Math.min(2.0, Math.max(BASE_RATE, backlog / FINISH_DURATION_MS));
-  }
-  typeShownLen = Math.min(tgt.length, typeShownLen + rate * TYPE_TICK_MS);
-  const el = document.getElementById('result-text');
-  el.textContent = tgt.slice(0, Math.floor(typeShownLen));
+  el.textContent = text;
   el.scrollTop = el.scrollHeight;
-  if (typeShownLen >= tgt.length) {
-    stopTyping();
-    if (pendingPass) renderEnhanceProgress(pendingPass.active, pendingPass.total);
-    if (pendingText) {
-      // предыдущий проход добран до конца — печатаем следующий проход геммы
-      const next = pendingText;
-      pendingText = null;
-      typeTarget = next;
-      typeShownLen = 0;
-      typeFinishing = false;
-      emaRate = null;
-      streamStartAt = performance.now();
-      startTypingTimer();
-    }
-  }
 }
 
 function resetTyping() {
-  stopTyping();
-  typeTarget = null;
-  typeShownLen = 0;
-  emaRate = null;
-  typingStarted = false;
-  streamStartAt = 0;
-  typeFinishing = false;
-  pendingText = null;
-  pendingPass = null;
   lastPassText = null;
   if (passTransitionTimer) {
     clearTimeout(passTransitionTimer);
     passTransitionTimer = null;
   }
   const el = document.getElementById('result-text');
-  el.classList.remove('pass-blink', 'pass-fade-out', 'pass-fade-in');
+  if (el) el.classList.remove('pass-blink', 'pass-fade-out', 'pass-fade-in');
 }
 
-function stopTyping() {
-  if (typeTimer) { clearInterval(typeTimer); typeTimer = null; }
-}
-
-// Приход финального события: печатаем оставшийся хвост равномерно за ~2 сек
-// вместо мгновенного скачка (иначе в переходе whisper→gemma всё «допрыгивает»).
 function finishStreaming(text, improved) {
   const el = document.getElementById('result-text');
-
-  // если печать уже шла и текст просто нарос — плавно добираем хвост
-  if (typeTarget && typingStarted && text.length > typeShownLen) {
-    typeTarget = text;
-    typeFinishing = true;
-    startTypingTimer();
-    return;
-  }
-  // иначе (текст не рос, печать не началась) — показать сразу
-  resetTyping();
   el.textContent = text;
+  el.scrollTop = el.scrollHeight;
 }
 
 /* ── Live panel ──────────────────────────────────────────── */
@@ -1330,17 +1252,10 @@ function setResultText(text, improved) {
 }
 
 function showEnhanceProgress(activePass, totalPasses) {
-  // номер прохода сервер шлёт в момент старта прохода, раньше его текста —
-  // не показываем, пока дописывается предыдущий проход
-  if (typingStarted && typeShownLen < (typeTarget ? typeTarget.length : 0)) {
-    pendingPass = { active: activePass, total: totalPasses };
-    return;
-  }
   renderEnhanceProgress(activePass, totalPasses);
 }
 
 function renderEnhanceProgress(activePass, totalPasses) {
-  pendingPass = null;
   const wrap = document.getElementById('enhance-progress');
   wrap.style.display = 'flex';
   const bar = document.getElementById('enhance-progress-bar');
@@ -1350,7 +1265,6 @@ function renderEnhanceProgress(activePass, totalPasses) {
 }
 
 function hideEnhanceProgress() {
-  pendingPass = null;
   document.getElementById('enhance-progress').style.display = 'none';
 }
 
@@ -1440,6 +1354,11 @@ function copyResult() {
 
 async function enhanceDraft() {
   if (!taskId || !currentFileName || enhanceBusy) return;
+  // Модель ИИ не установлена — предложить скачать, как в кнопке «Перевести».
+  if (!gemmaInstalled) {
+    offerLlmDownload(() => enhanceDraft());
+    return;
+  }
   // задача уже завершена и SSE закрыт (finish) — переподключаемся,
   // чтобы лайв-трансляция показывала проходы улучшения
   if (!eventSource) {
@@ -1466,6 +1385,10 @@ async function enhanceDraft() {
     const data = await resp.json();
     if (data.error) {
       addLog(`❌ ${data.error}`);
+      if (/LLM|модель|gemma|ИИ/i.test(data.error)) {
+        offerLlmDownload(() => enhanceDraft());
+        return;
+      }
     } else {
       enhanceOk = true;
       fileTexts[currentFileName] = data.text;
@@ -1591,7 +1514,7 @@ function pollLlmInstall() {
         document.getElementById('llm-dl-overlay').style.display = 'none';
         const cb = llmDownloadCb;
         llmDownloadCb = null;
-        if (cb) cb();
+        refreshModels().then(() => { if (cb) cb(); });
         return;
       }
       const msg = st.install_error || st.error || 'Не удалось установить модель';
@@ -1793,14 +1716,6 @@ function closeLogs() {
 
 /* ── Инициализация ──────────────────────────────────────── */
 
-function syncFileListHeight() {
-  const drop = document.getElementById('drop-zone');
-  const container = document.getElementById('file-list-container');
-  if (drop && container) {
-    container.style.height = drop.offsetHeight + 'px';
-  }
-}
-
 function requestRestart() {
   fetch('/api/restart', {
     method: 'POST',
@@ -1810,7 +1725,6 @@ function requestRestart() {
 }
   async function init() {
   initTheme();
-  syncFileListHeight();
   connectDownloads();
   await refreshGpu();
   await refreshModels();
@@ -1916,8 +1830,6 @@ document.getElementById('llm-port-apply')?.addEventListener('click', applyLlmPor
 // Подвал сам обновляет статус LLM: движок мог стартовать/упасть без действий
 // пользователя — чтобы предупреждение не висело вечно и не вводило в заблуждение.
 setInterval(refreshLlmStatus, 5000);
-
-window.addEventListener('resize', () => syncFileListHeight());
 
 document.body.addEventListener('dragover', e => e.preventDefault());
 document.body.addEventListener('drop', e => e.preventDefault());

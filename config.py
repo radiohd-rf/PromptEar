@@ -16,6 +16,16 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 # программы и снимается первым же /api/startup после него).
 SETTINGS_OPEN_FLAG = DATA_DIR / "open_settings.flag"
 TEMP_DIR: Final[Path] = BASE_DIR / "temp"
+TEMP_DIR.mkdir(exist_ok=True)
+
+# Waitress буферизует multipart-загрузки во временные файлы через tempfile,
+# который по умолчанию пишет в системный %TEMP% (обычно диск C:). Если на C:
+# нет места, upload падает с разрывом соединения (Errno 28 в tempfile) и
+# транскрибация не стартует. Переопределяем на собственный temp/ внутри
+# портативной папки — место гарантировано вместе с приложением.
+os.environ["TMPDIR"] = str(TEMP_DIR)
+os.environ["TEMP"] = str(TEMP_DIR)
+os.environ["TMP"] = str(TEMP_DIR)
 
 # Кэши моделей внутри портативной папки (не BrokenCache WebView2 — диск)
 MODELS_DIR = BASE_DIR / "models"
@@ -49,6 +59,16 @@ PREPROCESS_LOWPASS_FREQ = 8000  # убирает ВЧ-шум (речь 300-4000 
 # Модель по умолчанию (устанавливается из settings.json; каталог в
 # core/whisper_models.py). tiny — самая лёгкая, вшивается в сборку.
 WHISPER_DEFAULT_MODEL = "base"
+
+# Борьба с галлюцинациями-петлями («... ... ...» на длинном аудио, лекциях):
+# condition_on_previous_text=True (дефолт Whisper) возвращает декодеру его же
+# предыдущий вывод, и при длинной записи модель начинает зацикливать мусор.
+# False — петли в основном уходят (контекст берётся заново с VAD-старта).
+WHISPER_CONDITION_ON_PREVIOUS_TEXT = False
+# VAD-порог короче дефолтного (2000 мс): паузы режутся на сегменты чаще, значит
+# меньше «пустого» аудио на входе декодера, где и рождаются галлюцинации.
+WHISPER_VAD_MIN_SILENCE_MS = 500
+WHISPER_VAD_SPEECH_PAD_MS = 300
 
 # ── LLM-движок ──────────────────────────────────────────────────────────────
 LLM_ENGINE = "llama"

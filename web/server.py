@@ -506,11 +506,18 @@ def task_results(task_id):
     if not task:
         return jsonify({"error": "task not found"}), 404
     results = []
+    with_ts = bool(task.get("timestamps"))
     for result in task.get("results", {}).values():
+        text = result.text
+        # Окно должно показывать тот же текст, что записан в файл:
+        # если включены таймкоды — восстанавливаем метки [MM:SS] на абзацах,
+        # иначе после завершения метки исчезали из документа.
+        if with_ts and text.strip() and result.segments:
+            text = ensure_timestamps(result.segments, text)
         results.append(
             {
                 "filename": result.audio.display_name or result.audio.path.name,
-                "text": result.text,
+                "text": text,
             }
         )
     return jsonify({"results": results})
@@ -1024,6 +1031,20 @@ def restart_app():
             SETTINGS_OPEN_FLAG.write_text("1", encoding="utf-8")
         except OSError:
             pass
+    # Проект запускается как __main__ (pythonw main.py), поэтому _mutex_handle
+    # живёт в __main__, а не в модуле `import main` (это был бы ВТОРОЙ экземпляр
+    # с _mutex_handle=None — и мутекс остался б, новый процесс упёрся бы в
+    # «PromptEar уже запущен»). Освобождаем в том же экземпляре до запуска
+    # нового процесса.
+    main_mod = sys.modules.get("__main__")
+    release = getattr(main_mod, "_release_single_instance", None)
+    if callable(release):
+        try:
+            release()
+        except Exception:
+            get_logger().warning(
+                "Не удалось освободить single-instance мутекс", exc_info=True
+            )
     try:
         subprocess.Popen(
             [sys.executable, str(Path(__file__).resolve().parent.parent / "main.py")],

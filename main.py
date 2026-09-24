@@ -46,6 +46,23 @@ def _ensure_single_instance() -> None:
         sys.exit(0)
 
 
+def _release_single_instance() -> None:
+    """Освобождает мутекс single-instance перед перезапуском.
+
+    Пока старый процесс жив, он владеет мутексом (bInitialOwner=True), и новый
+    main.py на старте видит ERROR_ALREADY_EXISTS и выходит с окном
+    «PromptEar уже запущен». Закрытие последнего дескриптора уничтожает
+    именованный объект, имя освобождается, и новый процесс стартует нормально.
+    """
+    global _mutex_handle
+    try:
+        if _mutex_handle:
+            ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(_mutex_handle)
+    except Exception:
+        pass
+    _mutex_handle = None
+
+
 def _set_app_user_model_id() -> None:
     """Отдельный AppUserModelID — иначе таскбар группирует окно под иконку pythonw."""
     with contextlib.suppress(Exception):

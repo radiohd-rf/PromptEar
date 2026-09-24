@@ -11,8 +11,14 @@
 <div id="app">
   <header>
     <h1>PromptEar</h1>
-    <span id="subtitle">транскрибация аудио</span>
     <div id="run-area">
+      <button class="icon-btn line-icon" id="help-btn" onclick="openHelp()" title="Инструкция" aria-label="Инструкция">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+      </button>
+      <button class="icon-btn line-icon" id="theme-toggle" onclick="toggleTheme()" title="Тема" aria-label="Переключить тему">
+        <svg id="theme-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        <svg id="theme-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      </button>
       <button class="icon-btn line-icon" id="settings-btn" onclick="openSettingsModal()" title="Настройки" aria-label="Настройки">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
@@ -21,7 +27,7 @@
       </button>
       <div id="thinking-spinner" class="spinner" style="display:none"></div>
       <button id="run-btn" onclick="openLaunchModal()">
-        Запуск
+        Параметры и Запуск
         <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
       </button>
       <button id="cancel-btn" style="display:none" onclick="cancelPipeline()">Отмена</button>
@@ -41,12 +47,18 @@
         </div>
 
         <div id="file-list-container">
-          <h3>Файлы</h3>
+          <div id="file-list-header">
+            <h3>Файлы</h3>
+            <label id="file-select-all-label" title="Выделить все файлы">
+              <input type="checkbox" id="file-select-all" onchange="setAllChecked(this.checked)">
+              <span>Выбрать все</span>
+            </label>
+          </div>
           <ul id="file-list"></ul>
         </div>
 
         <div id="settings">
-          <textarea id="context-prompt" placeholder="Контекст (тема, имена, термины)" rows="2"></textarea>
+          <textarea id="context-prompt" placeholder="Контекст (тема, имена, термины)" rows="3"></textarea>
         </div>
       </div>
 
@@ -105,6 +117,8 @@
       <div class="modal-body">
         <h3><svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg> Как добавить файлы</h3>
         <p>Перетащите файлы в левую область или нажмите «Выбрать файлы». Можно загружать аудио (MP3, WAV, M4A и др.) и видео (MP4, AVI, MKV и др.).</p>
+        <h3><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0 0 20 10 10 0 0 0 0-20zm-1.2 13.5-4-4 1.4-1.4 2.6 2.6 5.4-5.4 1.4 1.4z"/></svg> Галочки в списке файлов</h3>
+        <p>Отмеченные галочкой файлы транскрибируются, снятые — пропускаются. Если не отмечен ни один — обрабатываются все. Клик по строке файла открывает его документ.</p>
         <h3><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM6 20V4h7v5h5v11z"/></svg> Контекст (необязательно)</h3>
         <p>Напишите тему разговора, имена людей или сложные термины — программа распознает их точнее.</p>
         <h3><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.63-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61zM12 15.6A3.61 3.61 0 0 1 8.4 12c0-1.98 1.62-3.6 3.6-3.6s3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg> Настройки</h3>
@@ -236,7 +250,7 @@
         <p class="modal-hint">Отметка времени в начале каждого фрагмента текста.</p>
         <div class="ai-check-row">
           <label class="modal-checkbox"><input type="checkbox" data-field="ai"> Обработать с ИИ (по умолчанию)</label>
-          <button type="button" id="ai-delete-row-btn" class="mini-btn danger" onclick="deleteAiModel()">Удалить модель</button>
+          <button type="button" id="ai-delete-row-btn" class="mini-btn danger" onclick="deleteAiModel()" style="display:none">Удалить модель</button>
         </div>
         <p class="modal-hint">Прогнать распознанный текст через ИИ-модель (Gemma) для чистоты и стиля.</p>
         <div class="modal-field">
@@ -249,10 +263,10 @@
         <div class="modal-field">
           <label>LLM-порт</label>
           <div class="modal-port-row">
-            <input type="number" data-field="llm-port" min="1024" max="65535" placeholder="8080-8129">
+            <input type="number" data-field="llm-port" min="1024" max="65535" placeholder="1024-65535, напр. 33333">
           </div>
         </div>
-        <p class="modal-hint">Порт локального llama-server. 8080 занят системой — используется 8081.</p>
+        <p class="modal-hint">Порт локального llama-server. По умолчанию 33333 (зона 8080–8130 конфликтная).</p>
       </div>
       <div class="modal-actions">
         <button class="btn-primary" onclick="saveSettingsFromModal()">Сохранить</button>
@@ -289,6 +303,21 @@
     </div>
   </div>
 
+  <!-- Пусто: нет медиа-файлов -->
+  <div id="alert-overlay" class="modal-overlay" style="display:none" onclick="closeAlertModal()">
+    <div class="modal-box confirm-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Нет файлов</h2>
+      </div>
+      <div class="modal-body">
+        <p>Добавьте медиа-файлы, прежде чем запускать обработку.</p>
+      </div>
+      <div class="modal-actions">
+        <button id="alert-ok" class="btn-primary" onclick="closeAlertModal()">ОК</button>
+      </div>
+    </div>
+  </div>
+
   <!-- LLM download confirm -->
   <div id="llm-dl-overlay" class="modal-overlay" style="display:none">
     <div class="modal-box confirm-box" onclick="event.stopPropagation()">
@@ -296,7 +325,7 @@
         <h2>Модель ИИ не установлена</h2>
       </div>
       <div class="modal-body">
-        <p id="llm-dl-text">Для перевода текста нужна локальная модель ИИ (Gemma). Скачать её автоматически?</p>
+        <p id="llm-dl-text">Для улучшения и перевода текста нужна локальная модель ИИ (Gemma). Скачать её автоматически?</p>
         <div id="llm-dl-progress" style="display:none">
           <div id="llm-dl-label" class="dl-label">Подготовка…</div>
           <div class="progress-track"><div id="llm-dl-bar"></div></div>
@@ -316,18 +345,11 @@
     <div id="llm-error-box" class="hidden">
       <span id="llm-error-text"></span>
       <span class="llm-port-field">
-        <input type="number" id="llm-port-input" min="1024" max="65535" placeholder="Порт 8080-8130, напр. 8081">
+        <input type="number" id="llm-port-input" min="1024" max="65535" placeholder="Порт 1024-65535, напр. 33333">
         <button id="llm-port-apply">Применить</button>
       </span>
     </div>
     <div id="footer-actions">
-      <button class="icon-btn line-icon" id="help-btn" onclick="openHelp()" title="Инструкция" aria-label="Инструкция">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
-      </button>
-      <button class="icon-btn line-icon" id="theme-toggle" onclick="toggleTheme()" title="Тема" aria-label="Переключить тему">
-        <svg id="theme-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-        <svg id="theme-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
-      </button>
       <button id="logs-btn" onclick="toggleLogs()" title="Логи" aria-label="Логи">
         <svg viewBox="0 0 24 24"><path d="M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v14h14V6zm2 2h10v1.5H7zm0 3h10v1.5H7zm0 3h7v1.5H7z"/></svg>
         Логи

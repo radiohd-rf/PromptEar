@@ -9,7 +9,14 @@ from pathlib import Path
 from threading import Event
 from typing import Any
 
-from config import CT2_CACHE, TRANSCRIBE_STALL_TIMEOUT_SEC, WHISPER_DEFAULT_MODEL
+from config import (
+    CT2_CACHE,
+    TRANSCRIBE_STALL_TIMEOUT_SEC,
+    WHISPER_CONDITION_ON_PREVIOUS_TEXT,
+    WHISPER_DEFAULT_MODEL,
+    WHISPER_VAD_MIN_SILENCE_MS,
+    WHISPER_VAD_SPEECH_PAD_MS,
+)
 from core.models import Segment
 
 
@@ -224,6 +231,16 @@ class Transcriber:
         language = kwargs.pop("language", "ru")
         beam_size = kwargs.pop("beam_size", 5)
         vad_filter = kwargs.pop("vad_filter", True)
+        condition_on_previous_text = kwargs.pop(
+            "condition_on_previous_text", WHISPER_CONDITION_ON_PREVIOUS_TEXT
+        )
+        vad_parameters = kwargs.pop(
+            "vad_parameters",
+            {
+                "min_silence_duration_ms": WHISPER_VAD_MIN_SILENCE_MS,
+                "speech_pad_ms": WHISPER_VAD_SPEECH_PAD_MS,
+            },
+        )
 
         parts: list[str] = []
         raw_segments: list[Segment] = []
@@ -273,6 +290,8 @@ class Transcriber:
                         language=language,
                         beam_size=beam_size,
                         vad_filter=vad_filter,
+                        vad_parameters=vad_parameters,
+                        condition_on_previous_text=condition_on_previous_text,
                         **kwargs,
                     )
                     info_box["info"] = info

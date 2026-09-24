@@ -4,9 +4,10 @@ title PromptEar
 set "APP_DIR=%~dp0"
 set "VENV_DIR=%APP_DIR%venv"
 
-rem Порт llama-server: 8080 занят системным Apache (httpd), используем 8081.
+rem Порт llama-server: в зоне 8080-8130 живёт системный Apache (httpd) и другие
+rem службы, поэтому берём свободный 5-значный порт 33333.
 rem Сам сервер поднимается один раз вручную/при установке и живёт отдельно.
-set "PROMPTEAR_LLM_PORT=8081"
+set "PROMPTEAR_LLM_PORT=33333"
 
 rem Обычный запуск — БЕЗ терминала: перезапускаем себя скрытно через wscript.
 rem Консоль остаётся видимой только в ветке bootstrap (установка зависимостей).
