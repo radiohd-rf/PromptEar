@@ -1,6 +1,6 @@
 # PromptEar
 
-![Version](https://img.shields.io/badge/version-0.16.1-blue)
+![Version](https://img.shields.io/badge/version-0.16.2-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078d7)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Privacy](https://img.shields.io/badge/privacy-100%25_local-brightgreen)
@@ -106,7 +106,7 @@
 python build_zips.py
 ```
 
-Требуется Python 3.10+ и интернет. На выходе — `PromptEar-v0.16.1.zip`
+Требуется Python 3.10+ и интернет. На выходе — `PromptEar-v0.16.2.zip`
 с wheel-файлами зависимостей, ffmpeg, llama.cpp и моделью Whisper base.
 
 ## Лицензия
