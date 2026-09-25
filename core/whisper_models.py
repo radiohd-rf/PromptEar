@@ -12,10 +12,10 @@ from pathlib import Path
 from config import CT2_CACHE
 
 # алиас -> (HF repo_id, приблизительный размер в МБ, описание)
-# По решению пользователя оставлены только две модели: базовая (по умолчанию)
-# и самая мощная large-v3 (для иностранной речи). Остальное — историческое.
+# По решению пользователя каталог: base (по умолчанию), small и large-v3.
 WHISPER_CATALOG: dict[str, tuple[str, int, str]] = {
     "base": ("Systran/faster-whisper-base", 145, "базовая, компромисс"),
+    "small": ("Systran/faster-whisper-small", 460, "точнее base, компромисс"),
     "large-v3": ("Systran/faster-whisper-large-v3", 2900, "самая мощная, иностранная речь"),
 }
 

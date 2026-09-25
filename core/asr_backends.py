@@ -13,17 +13,13 @@ from core import whisper_models as wm
 # Порядок — как показывается в UI (GigaAM для русского впереди).
 BACKENDS: list[tuple[str, str, str, str, int, str]] = [
     ("gigaam_e2e_rnnt", "gigaam", "e2e_rnnt", "GigaAM v3 e2e_rnnt", 428,
-     "RNN-T с пунктуацией, лучшая точность"),
-    ("gigaam_e2e_ctc", "gigaam", "e2e_ctc", "GigaAM v3 e2e_ctc", 428,
-     "CTC с пунктуацией, самая быстрая"),
-    ("gigaam_rnnt", "gigaam", "rnnt", "GigaAM v3 rnnt", 428,
-     "RNN-T без пунктуации"),
-    ("gigaam_ctc", "gigaam", "ctc", "GigaAM v3 ctc", 428,
-     "CTC без пунктуации"),
-    ("whisper_large", "whisper", "large-v3", "Whisper large-v3", 2900,
-     "максимальная точность, русский+английский"),
+     "RNN-T с пунктуацией, лучшая точность русского"),
     ("whisper_base", "whisper", "base", "Whisper base", 145,
      "базовая, компромисс (по умолчанию)"),
+    ("whisper_small", "whisper", "small", "Whisper small", 460,
+     "точнее base, компромисс"),
+    ("whisper_large", "whisper", "large-v3", "Whisper large-v3", 2900,
+     "максимальная точность, русский+английский"),
 ]
 
 DEFAULT_BACKEND = "whisper_base"

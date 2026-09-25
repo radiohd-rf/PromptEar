@@ -460,6 +460,24 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
 #file-list li.selected {
   background: var(--md-primary-container);
 }
+#file-list li.dragging {
+  opacity: 0;
+  height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin: 0;
+  border: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+#file-list li.dnd-placeholder {
+  padding: 4px var(--sp-3) 4px var(--sp-4);
+  min-height: 24px;
+  border: none;
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--md-primary-container) 55%, transparent);
+  box-sizing: border-box;
+}
 #file-list .file-check {
   width: 16px;
   height: 16px;
@@ -562,7 +580,7 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   gap: var(--sp-1);
   row-gap: var(--sp-1);
 }
-#enhance-btn {
+#refine-btn {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
@@ -573,20 +591,26 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   font-size: var(--fs-label);
   font-weight: 500;
 }
-#enhance-btn svg { width: 16px; height: 16px; fill: currentColor; }
-#enhance-btn:hover { background: var(--md-tertiary); color: var(--md-on-tertiary); }
-#enhance-btn.busy {
+#refine-btn svg { width: 16px; height: 16px; fill: currentColor; }
+#refine-btn:hover { background: var(--md-tertiary); color: var(--md-on-tertiary); }
+#refine-btn.done {
+  background: var(--md-surface-variant, #e7e0ec);
+  color: var(--md-on-surface-variant, #49454f);
+  cursor: default;
+}
+#refine-btn.done:hover { background: var(--md-surface-variant, #e7e0ec); color: var(--md-on-surface-variant, #49454f); }
+#refine-btn.busy {
   background: var(--md-error-container, #f9dedc);
   color: var(--md-on-error-container, #410e0b);
 }
-#enhance-btn.busy #enhance-icon { display: none; }
-#enhance-btn.busy #enhance-spinner {
+#refine-btn.busy #refine-icon { display: none; }
+#refine-btn.busy #refine-spinner {
   display: inline-block;
   width: 16px;
   height: 16px;
   border-width: 2px;
 }
-#enhance-status {
+#refine-status {
   display: inline-flex;
   align-items: center;
   padding: 4px var(--sp-3);
@@ -598,33 +622,7 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   cursor: default;
   user-select: none;
 }
-#translate-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-  padding: 4px var(--sp-3);
-  background: var(--md-surface-container-high);
-  color: var(--md-on-surface-variant);
-  border-radius: var(--r-pill);
-  font-size: var(--fs-label);
-  font-weight: 500;
-}
-#translate-btn svg { width: 16px; height: 16px; fill: currentColor; }
-#translate-btn:hover { background: var(--md-surface-variant); color: var(--md-on-surface); }
-#translate-lang {
-  display: inline-block;
-  max-width: 150px;
-  padding: 5px var(--sp-2);
-  background: var(--md-surface-container-high);
-  color: var(--md-on-surface-variant);
-  border: 1px solid var(--md-outline-variant);
-  border-radius: var(--r-pill);
-  font-size: var(--fs-label);
-  font-weight: 500;
-  cursor: pointer;
-}
-#translate-lang:hover { background: var(--md-surface-variant); color: var(--md-on-surface); }
-#translate-reset-btn {
+#refine-reset-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -635,8 +633,8 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   color: var(--md-on-surface-variant);
   border-radius: 50%;
 }
-#translate-reset-btn svg { width: 18px; height: 18px; fill: currentColor; }
-#translate-reset-btn:hover { background: var(--md-surface-variant); color: var(--md-on-surface); }
+#refine-reset-btn svg { width: 18px; height: 18px; fill: currentColor; }
+#refine-reset-btn:hover { background: var(--md-surface-variant); color: var(--md-on-surface); }
 .live-actions {
   margin-left: auto;
   display: flex;
@@ -661,7 +659,7 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
 }
 .live-actions button svg { width: 16px; height: 16px; fill: currentColor; }
 .live-actions button:hover { background: var(--md-surface-variant); color: var(--md-on-surface); }
-#enhance-progress {
+#refine-progress {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -674,14 +672,14 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   background: var(--md-surface-variant);
   overflow: hidden;
 }
-#enhance-progress-bar {
+#refine-progress-bar {
   height: 100%;
   width: 0%;
   background: var(--md-primary);
   border-radius: var(--r-pill);
   transition: width .3s var(--ease-std);
 }
-#enhance-progress-label { font-size: var(--fs-label); color: var(--md-on-surface-variant); white-space: nowrap; }
+#refine-progress-label { font-size: var(--fs-label); color: var(--md-on-surface-variant); white-space: nowrap; }
 .download-box .progress-track { flex: none; margin-top: var(--sp-1); }
 #dl-bar {
   height: 100%;
@@ -711,17 +709,6 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   color: var(--md-error, #b3261e);
   white-space: pre-wrap;
 }
-#translate-btn.busy {
-  background: var(--md-error-container, #f9dedc);
-  color: var(--md-on-error-container, #410e0b);
-}
-#translate-btn.busy #translate-icon { display: none; }
-#translate-btn.busy #translate-spinner {
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  border-width: 2px;
-}
 @keyframes dl-indet {
   0% { margin-left: -40%; }
   100% { margin-left: 100%; }
@@ -736,6 +723,21 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   word-break: break-word;
   min-height: 0;
   color: var(--md-on-surface);
+}
+
+#result-text .ts-badge {
+  display: inline-block;
+  margin-right: var(--sp-2);
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-pill);
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+  font-family: var(--ff-mono, ui-monospace, Consolas, monospace);
+  font-size: 0.8em;
+  font-weight: 600;
+  line-height: 1.5;
+  vertical-align: baseline;
+  white-space: nowrap;
 }
 
 /* ── Переход между проходами геммы: мигание → затухание → появление ── */
@@ -928,6 +930,27 @@ footer span:empty { display: none; }
 }
 .modal-actions .btn-primary:hover { background: var(--md-primary); opacity: .9; }
 .modal-field { margin-bottom: var(--sp-3); }
+.details-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: var(--md-surface-variant, #e7e0ec);
+  color: var(--md-on-surface-variant, #49454f);
+  border: none;
+  border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-label);
+  font-weight: 600;
+  cursor: pointer;
+}
+.details-toggle:hover { filter: brightness(0.96); }
+.details-arrow { transition: transform 0.15s ease; font-size: 12px; }
+.advanced-panel {
+  padding: var(--sp-3);
+  border: 1px dashed var(--md-outline-variant, #cac4d0);
+  border-radius: var(--r-sm);
+  margin-bottom: var(--sp-3);
+}
 .modal-field label {
   display: block;
   margin-bottom: var(--sp-1);
@@ -1055,7 +1078,8 @@ footer span:empty { display: none; }
 #cancel-btn:active { transform: scale(.94); }
 
 /* ── Пиллы инструментов (улучшить/перевести) ───────────── */
-#enhance-btn, #translate-btn, #translate-lang, #translate-reset-btn,
+/* ── Пиллы инструментов (улучшить текст) ───────────────── */
+#refine-btn, #refine-reset-btn,
 .live-actions button, .modal-actions button {
   transition: background-color var(--dur-2) var(--ease-std),
               color var(--dur-2) var(--ease-std),
@@ -1063,13 +1087,12 @@ footer span:empty { display: none; }
               box-shadow .2s var(--ease-std),
               border-color var(--dur-2) var(--ease-std);
 }
-#enhance-btn:hover:not(.busy), #translate-btn:hover:not(.busy),
-#translate-lang:hover, #translate-reset-btn:hover,
+#refine-btn:hover:not(.busy), #refine-reset-btn:hover,
 .live-actions button:hover {
   transform: translateY(-1px);
 }
-#enhance-btn:not(.busy), #translate-btn:not(.busy) { box-shadow: var(--elev-0); }
-#enhance-btn:not(.busy):hover, #translate-btn:not(.busy):hover {
+#refine-btn:not(.busy) { box-shadow: var(--elev-0); }
+#refine-btn:not(.busy):hover {
   box-shadow: var(--elev-1);
 }
 
@@ -1092,7 +1115,7 @@ footer span:empty { display: none; }
 }
 
 /* ── Прогресс: шиммер по полосе ────────────────────────── */
-#enhance-progress-bar, #dl-bar, #llm-dl-bar {
+#refine-progress-bar, #dl-bar, #llm-dl-bar {
   background: linear-gradient(90deg,
               var(--md-primary) 0%,
               color-mix(in srgb, var(--md-primary) 55%, white) 45%,

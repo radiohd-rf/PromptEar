@@ -11,6 +11,7 @@ let liveFile = null;
 // уводят события других файлов (только сохраняем их тексты/статусы).
 // Снимается новым запуском. Без закрепления окно следует за работой.
 let userPinnedFile = null;
+let expectedDones = 1;      // сколько done-событий ждать от сервера (2 при переводе)
 let launchParams = {};   // последние параметры запуска (формат, тайм-коды, ИИ, движок, GPU)
 let appSettings = {asr_backend: 'whisper_base', use_gpu: false, output_format: 'docx', timestamps: false, ai_enabled: false};
 let backendList = [];       // [{id, kind, group, label, size_mb, description, installed}]
@@ -27,12 +28,14 @@ function downloadBlockingRun() {
 const fileStatuses = {};   // имя -> status
 const fileTexts = {};      // имя -> последний текст (черновик/улучшенный)
 const fileBadges = {};     // имя -> бейдж
-const fileTranslations = {}; // имя -> {lang, text, outputPath} — последний перевод
+const fileRefined = {};    // имя -> {lang?, text, outputPath} — результат улучшения/перевода
+const fileOriginal = {};   // имя -> исходная расшифровка (сохраняется до первой перезаписи)
+const refinedView = {};    // имя -> false: в окне транскрибация, true/undefined: улучшенный текст
 const fileChecked = {};    // имя -> отмечен ли галочкой для транскрибации
-let translateBusy = false;  // идёт перевод («Переводим…»)
-let translateError = '';    // текст ошибки последнего перевода
-let translateAbort = null;  // AbortController активного перевода
-let translateCancelling = false; // пользователь нажал «Отмена»
+let refineBusy = false;    // идёт улучшение/перевод («Обработка…»)
+let refineError = '';      // текст ошибки последней операции
+let refineAbort = null;    // AbortController активной операции
+let refineCancelling = false; // пользователь нажал «Отмена»
 let llmDownloadCb = null;   // колбэк после успешной установки модели ИИ
 let llmPollTimer = null;
 let llmCancelRequested = false; // пользователь нажал «Отмена» во время скачивания
@@ -154,6 +157,18 @@ function openLaunchModal() {
 }
 function closeLaunchModal() { closeModal('launch-overlay'); }
 
+// Сворачивание/разворачивание блока «Расширенные параметры» в модале запуска.
+function toggleLaunchAdvanced() {
+  const panel = document.getElementById('launch-advanced');
+  const toggle = document.getElementById('launch-advanced-toggle');
+  const arrow = document.getElementById('launch-advanced-arrow');
+  if (!panel) return;
+  const expanded = panel.style.display !== 'none';
+  panel.style.display = expanded ? 'none' : '';
+  if (toggle) toggle.setAttribute('aria-expanded', String(!expanded));
+  if (arrow) arrow.textContent = expanded ? '▸' : '▾';
+}
+
 function openAlertModal() { openModal('alert-overlay'); }
 function closeAlertModal() { closeModal('alert-overlay'); }
 
@@ -269,14 +284,31 @@ function backendInfo(id) {
 
 function collectModal(rootId) {
   const root = document.getElementById(rootId);
-  const field = (f) => root.querySelector(`[data-field="${f}"]`);
-  return {
-    output_format: field('format').value,
-    timestamps: !!field('timestamps').checked,
-    ai_enabled: !!field('ai').checked,
-    asr_backend: field('model').value,
-    use_gpu: !!field('gpu').checked,
+  const val = (f) => root.querySelector(`[data-field="${f}"]`);
+  const out = {
+    output_format: val('format') ? val('format').value : (appSettings.output_format || 'docx'),
+    timestamps: val('timestamps') ? !!val('timestamps').checked : !!appSettings.timestamps,
+    ai_enabled: val('ai') ? !!val('ai').checked : !!appSettings.ai_enabled,
+    asr_backend: val('model') ? val('model').value : (appSettings.asr_backend || 'whisper_base'),
+    use_gpu: val('gpu') ? !!val('gpu').checked : !!appSettings.use_gpu,
   };
+  const trCb = val('translate');
+  const trSel = val('translate-lang');
+  if (trCb && trSel) {
+    out.translate = !!trCb.checked;
+    out.translate_lang = trSel.value || 'en';
+    out.translate_name = trSel.selectedOptions && trSel.selectedOptions[0]
+      ? trSel.selectedOptions[0].textContent
+      : out.translate_lang;
+  }
+  return out;
+}
+
+// При включении чекбокса «Перевести» разблокируется выбор языка.
+function syncLaunchTranslate() {
+  const cb = document.querySelector('#launch-overlay [data-field="translate"]');
+  const sel = document.querySelector('#launch-overlay [data-field="translate-lang"]');
+  if (cb && sel) sel.disabled = !cb.checked;
 }
 
 async function saveSettings(patch) {
@@ -480,7 +512,7 @@ async function refreshModels() {
     gemmaInstalled = !!data.gemma_installed;
     gigaamDepsOk = !!data.gigaam_deps_ok;
     if (data.current) appSettings.asr_backend = data.current;
-    syncEnhanceButton();
+    syncRefineButton();
     syncAiDeleteBtn();
   } catch (_) {}
 }
@@ -649,7 +681,9 @@ function removeFile(idx) {
   fileStatuses[name] = undefined;
   delete fileTexts[name];
   delete fileBadges[name];
-  delete fileTranslations[name];
+  delete fileRefined[name];
+  delete fileOriginal[name];
+  delete refinedView[name];
   delete fileChecked[name];
   files.splice(idx, 1);
   const wasCurrent = currentFileName === name;
@@ -667,9 +701,8 @@ function removeFile(idx) {
     // удалён файл, который был показан в окне документа, и показывать больше нечего
     if (wasCurrent) {
       setResultText('', false);
-      hideEnhanceStatus();
-      syncEnhanceButton();
-      syncTranslateButton();
+      hideRefineStatus();
+      syncRefineButton();
       syncResultActions();
     }
   }
@@ -690,6 +723,8 @@ function renderFileList() {
     const selected = f.name === currentFileName;
     const checked = fileChecked[f.name] !== false;
     return `<li class="file-item ${selected ? 'selected' : ''}"
+      draggable="true"
+      data-index="${i}"
       data-name="${escapeHtml(f.name)}" onclick="selectFile('${escapeJs(f.name)}')">
       <input type="checkbox" class="file-check" ${checked ? 'checked' : ''}
         onchange="toggleFileCheck('${escapeJs(f.name)}', this.checked)"
@@ -702,8 +737,129 @@ function renderFileList() {
       <span class="remove" onclick="event.stopPropagation(); removeFile(${i})" title="Убрать из списка" aria-label="Убрать из списка">✕</span>
     </li>`;
   }).join('');
+  wireFileListDnd(list);
   updateSelectAll();
   syncResultActions();
+}
+
+/* ── Переупорядочивание файлов перетаскиванием ──────────────
+   Паттерн из SortableJS/fwdtools: drag-картинка подменяется прозрачной
+   заглушкой (призрака нет), исходная строка схлопывается, а позиция
+   вставки вычисляется по средним точкам строк — placeholder
+   вставляется между ними, и соседние строки сдвигаются. */
+
+let dndDragEl = null;
+let dndDragName = null;
+
+function makePlaceholder(name) {
+  const ph = document.createElement('li');
+  ph.className = 'file-item dnd-placeholder';
+  ph.dataset.name = name;
+  return ph;
+}
+
+// Возвращает элемент, ПЕРЕД которым нужно вставить перетаскиваемую строку
+// (первый, чья средняя точка ниже курсора).
+function getDragAfterElement(list, y) {
+  const items = [...list.querySelectorAll('li.file-item:not(.dragging):not(.dnd-drag-image)')];
+  return items.reduce((closest, child) => {
+    const box = child.getBoundingClientRect();
+    const offset = y - box.top - box.height / 2;
+    if (offset < 0 && offset > closest.offset) {
+      return { offset, element: child };
+    }
+    return closest;
+  }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
+}
+
+function wireFileListDnd(list) {
+  list.querySelectorAll('li.file-item').forEach((li) => {
+    li.addEventListener('dragstart', (e) => {
+      dndDragEl = li;
+      dndDragName = li.dataset.name || null;
+      removeDndSlot(list);
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', dndDragName || '');
+      // призрак — точная непрозрачная копия исходной строки: тот же вид,
+      // форма и цвет, только в виде плашки. fixed уводит клон из зоны
+      // обрезки overflow у #file-list, иначе браузер не снимает его.
+      const dragImage = li.cloneNode(true);
+      dragImage.style.cssText =
+        'position:fixed !important;left:-10000px !important;top:-10000px !important;' +
+        'opacity:1 !important;pointer-events:none !important;margin:0 !important;';
+      if (!li.classList.contains('selected')) {
+        dragImage.style.background = 'var(--md-surface-container-high)';
+      }
+      list.appendChild(dragImage);
+      // точка захвата в строке = точка привязки к курсору
+      const rect = li.getBoundingClientRect();
+      const grabX = Math.max(0, e.clientX - rect.left);
+      const grabY = Math.max(0, e.clientY - rect.top);
+      e.dataTransfer.setDragImage(dragImage, grabX, grabY);
+      requestAnimationFrame(() => {
+        dragImage.remove();
+        li.classList.add('dragging');
+      });
+    });
+    li.addEventListener('dragend', () => {
+      cleanupDnd(list);
+    });
+  });
+  // Позиционирование вешается на контейнер: это убирает мигание
+  // placeholder'а, когда курсор переходит между строками.
+  list.addEventListener('dragover', (e) => {
+    if (!dndDragName) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const afterEl = getDragAfterElement(list, e.clientY);
+    let ph = list.querySelector('.dnd-placeholder');
+    if (!ph) ph = makePlaceholder(dndDragName);
+    list.insertBefore(ph, afterEl);
+  });
+  list.addEventListener('dragleave', (e) => {
+    if (!dndDragName) return;
+    if (list.contains(e.relatedTarget)) return;
+    removeDndSlot(list);
+  });
+  list.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dndDragName) return;
+    const ph = list.querySelector('.dnd-placeholder');
+    if (ph && dndDragEl) {
+      list.insertBefore(dndDragEl, ph);
+      ph.remove();
+    }
+    reorderFromDnd(list);
+  });
+}
+
+function removeDndSlot(list) {
+  const slot = list.querySelector('.dnd-placeholder');
+  if (slot) slot.remove();
+}
+
+// Новый порядок files берём прямо из DOM: после drop перетаскиваемая
+// строка уже стоит на своём месте, placeholder удалён.
+function reorderFromDnd(list) {
+  removeDndSlot(list);
+  const byName = new Map(files.map(f => [f.name, f]));
+  const ordered = [];
+  list.querySelectorAll('li.file-item').forEach((li) => {
+    const name = li.dataset.name;
+    if (name && byName.has(name)) ordered.push(byName.get(name));
+  });
+  if (ordered.length === files.length) files = ordered;
+  cleanupDnd(list, true);
+}
+
+function cleanupDnd(list, keepSelection) {
+  removeDndSlot(list);
+  list.querySelectorAll('li.file-item.dragging').forEach(el => el.classList.remove('dragging'));
+  dndDragEl = null;
+  dndDragName = null;
+  if (!keepSelection) return;
+  renderFileList();
 }
 
 function toggleFileCheck(name, checked) {
@@ -730,24 +886,22 @@ function selectFile(name) {
   currentFileName = name;
   userPinnedFile = name;
   renderFileList();
-  const text = fileTexts[name] || '';
-  const improved = fileBadges[name] === 'Улучшено ИИ';
-  const tr = fileTranslations[name];
-  if (tr) {
-    // файл был переведён — показываем последний перевод
-    setResultText(tr.text, true);
+  const rf = fileRefined[name];
+  if (rf && refinedView[name] !== false) {
+    // улучшенный/переведённый вариант
+    setResultText(rf.text, true);
   } else {
-    setResultText(text, improved);
+    const text = fileOriginal[name] !== undefined ? fileOriginal[name] : (fileTexts[name] || '');
+    setResultText(text, false);
   }
-  syncEnhanceButton();
-  syncTranslateButton();
+  syncRefineButton();
 }
 
 // Кнопки «Копировать» и «Открыть в редакторе» — появляются, когда у
 // текущего файла есть готовый результат.
 function syncResultActions() {
   const name = currentFileName;
-  const hasDoc = !!(name && (fileTexts[name] || fileTranslations[name]));
+  const hasDoc = !!(name && (fileTexts[name] || fileRefined[name]));
   const copy = document.getElementById('copy-btn');
   const openDoc = document.getElementById('open-doc-btn');
   if (copy) copy.style.display = hasDoc ? '' : 'none';
@@ -756,8 +910,8 @@ function syncResultActions() {
 
 async function openResultDoc() {
   if (!taskId || !currentFileName) return;
-  const tr = fileTranslations[currentFileName];
-  const body = tr && tr.outputPath ? { translated: true } : {};
+  const rf = fileRefined[currentFileName];
+  const body = rf && rf.outputPath && rf.lang ? { translated: true } : {};
   try {
     const resp = await fetch(
       `/api/open-doc/${taskId}/${encodeURIComponent(currentFileName)}`,
@@ -774,129 +928,99 @@ async function openResultDoc() {
   }
 }
 
-// Кнопка «Перевести» — видна всегда, когда есть текст результата;
-// в ручном режиме (none) её не прячем — перевод независим от улучшения.
-// Состояния: idle «Перевести» → busy «Отмена»+спиннер → «Переведено (LANG)».
-// Кнопка «Оригинал» (↺) — видна только когда у файла есть сохранённый перевод.
-function onTranslateClick() {
-  if (translateBusy) {
-    cancelTranslate();
+// Одна кнопка «Улучшить текст»: открывает модалку (улучшить с ИИ и/или
+// перевести) и во время работы превращается в «Остановить».
+function onRefineClick() {
+  if (refineBusy) {
+    cancelRefine();
     return;
   }
-  openTranslateModal();
+  openRefineModal();
 }
 
-function syncTranslateButton() {
+// Кнопка-переключатель «транскрибация ⇄ улучшенный текст»: показывает
+// направление (↶ назад к транскрибации / → вперёд к улучшенному).
+function updateResetDirection(name) {
+  const btn = document.getElementById('refine-reset-btn');
+  if (!btn) return;
+  const toOriginal = refinedView[name] !== false; // сейчас в окне улучшенный текст
+  btn.title = toOriginal ? 'Показать транскрибацию' : 'Показать улучшенный текст';
+  btn.setAttribute('aria-label', btn.title);
+  const svg = document.getElementById('refine-reset-icon');
+  if (svg) {
+    svg.innerHTML = toOriginal
+      ? '<path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>'
+      : '<path d="M4 11h12.17l-5.59-5.59L12 4l8 8-8 8-1.41-1.41L16.17 13H4v-2z"/>';
+  }
+}
+
+function syncRefineButton() {
   const name = currentFileName;
   const text = (name && fileTexts[name]) || '';
-  const btn = document.getElementById('translate-btn');
-  const label = document.getElementById('translate-label');
-  const iconEl = document.getElementById('translate-icon');
-  const spinner = document.getElementById('translate-spinner');
-  const sel = document.getElementById('translate-lang');
-  const resetBtn = document.getElementById('translate-reset-btn');
-  const hasTr = !!(name && fileTranslations[name]);
-  if (resetBtn) resetBtn.style.display = hasTr ? '' : 'none';
-  if (enhanceBusy) {
-    // идёт улучшение — кнопка перевода не нужна (показан «Остановить улучшение»)
-    btn.style.display = 'none';
-    if (sel) sel.style.display = 'none';
-    if (resetBtn) resetBtn.style.display = 'none';
-    return;
+  const btn = document.getElementById('refine-btn');
+  const label = document.getElementById('refine-label');
+  const iconEl = document.getElementById('refine-icon');
+  const spinner = document.getElementById('refine-spinner');
+  const resetBtn = document.getElementById('refine-reset-btn');
+  const refined = (name && fileRefined[name]) || null;
+  if (resetBtn) {
+    if (refined) {
+      resetBtn.style.display = '';
+      updateResetDirection(name);
+    } else {
+      resetBtn.style.display = 'none';
+    }
   }
-  if (translateBusy) {
-    btn.style.display = '';
-    btn.disabled = false; // это теперь «Остановить перевод»
-    btn.classList.add('busy');
-    if (label) label.textContent = 'Остановить перевод';
-    if (spinner) spinner.style.display = '';
-    if (iconEl) iconEl.style.display = 'none';
-    if (sel) sel.style.display = 'none';
-    if (resetBtn) resetBtn.style.display = 'none';
-    return;
-  }
-  btn.disabled = false;
-  btn.classList.remove('busy');
-  if (spinner) spinner.style.display = 'none';
-  if (iconEl) iconEl.style.display = '';
-  if (label) {
-    const tr = name && fileTranslations[name];
-    label.textContent = (tr && tr.lang)
-      ? `Переведено (${tr.lang.toUpperCase()})`
-      : 'Перевести';
-  }
-  if (text) {
-    btn.style.display = '';
-    if (sel) sel.style.display = '';
-  } else {
-    btn.style.display = 'none';
-    if (sel) sel.style.display = 'none';
-  }
-}
-
-// Возвращает исходный текст в лайв-окно (перевод остаётся сохранён в файле,
-// удаляется только из состояния просмотра, чтобы можно было переводить заново).
-function resetTranslation() {
-  const name = currentFileName;
-  if (!name || !fileTranslations[name]) return;
-  delete fileTranslations[name];
-  const improved = fileBadges[name] === 'Улучшено ИИ';
-  setResultText(fileTexts[name] || '', improved);
-  syncEnhanceButton();
-  syncTranslateButton();
-}
-
-// Статус/кнопка «Улучшить с ИИ» для текущего файла:
-//  - переведённый текст → кнопка «Улучшить с ИИ» (улучшается исходная расшифровка)
-//  - улучшенный текст → не-кликабельный статус «Улучшено с ИИ»
-//  - черновик в ручном режиме → кнопка «Улучшить с ИИ»
-//  - в режиме «с обработкой» (auto), когда нет перевода → кнопки нет (SSE 'result')
-// Единое место синхронизации: вызывается при выборе файла и после улучшения.
-function syncEnhanceButton() {
-  const btn = document.getElementById('enhance-btn');
-  const label = document.getElementById('enhance-label');
-  const iconEl = document.getElementById('enhance-icon');
-  const spinner = document.getElementById('enhance-spinner');
-  if (enhanceBusy) {
-    // идёт улучшение: вместо статуса — кнопка «Остановить улучшение» со спиннером
+  if (refineBusy) {
     btn.style.display = '';
     btn.disabled = false;
     btn.classList.add('busy');
-    if (label) label.textContent = 'Остановить улучшение';
+    if (label) label.textContent = 'Остановить';
     if (iconEl) iconEl.style.display = 'none';
     if (spinner) spinner.style.display = '';
-    hideEnhanceStatus();
-    return;
-  }
-  if (translateBusy) {
-    // идёт перевод — кнопка улучшения не нужна (показан «Остановить перевод»)
-    hideEnhanceButton();
+    hideRefineStatus();
     return;
   }
   btn.disabled = false;
   btn.classList.remove('busy');
+  btn.classList.remove('done');
   if (spinner) spinner.style.display = 'none';
   if (iconEl) iconEl.style.display = '';
-  if (label) label.textContent = 'Улучшить с ИИ';
-  const name = currentFileName;
-  const text = (name && fileTexts[name]) || '';
-  const improved = fileBadges[name] === 'Улучшено ИИ';
-  const tr = fileTranslations[name];
-  if (tr) {
-    // после перевода кнопку «Улучшить с ИИ» не прячем: улучшение работает по
-    // исходной расшифровке (перевод — отдельный файл и остаётся на диске),
-    // после улучшения текст в лайв-окне снова на исходном языке, перевести можно повторно
-    hideEnhanceStatus();
-    showEnhanceButton();
-  } else if (improved) {
-    hideEnhanceButton();
-    showEnhanceStatus('Улучшено с ИИ');
-  } else if (enhanceMode !== 'auto' && text) {
-    showEnhanceButton();
-  } else {
-    hideEnhanceButton();
-    hideEnhanceStatus();
+  if (label) {
+    if (refined && refinedView[name] !== false) {
+      // в окне улучшенный/переведённый текст — кнопка становится статусом
+      if (refined.lang) label.textContent = `Улучшено (${refined.lang.toUpperCase()})`;
+      else label.textContent = 'Улучшено';
+      btn.disabled = true;
+      btn.classList.add('done');
+    } else {
+      // показана транскрибация или результат не улучшали — можно улучшить снова
+      label.textContent = 'Улучшить текст';
+    }
   }
+  if (text) {
+    btn.style.display = '';
+  } else {
+    btn.style.display = 'none';
+    if (resetBtn) resetBtn.style.display = 'none';
+  }
+}
+
+// Переключает окно между исходной транскрибацией и улучшенным/переведённым
+// текстом (сам результат сохранён, кнопка не исчезает).
+function resetRefined() {
+  const name = currentFileName;
+  const rf = fileRefined[name];
+  if (!name || !rf) return;
+  if (refinedView[name] === false) {
+    refinedView[name] = true;
+    setResultText(rf.text, true);
+  } else {
+    refinedView[name] = false;
+    const original = fileOriginal[name] !== undefined ? fileOriginal[name] : (fileTexts[name] || '');
+    setResultText(original, false);
+  }
+  syncRefineButton();
 }
 
 /* ── Загрузка и обработка ────────────────────────────────── */
@@ -909,6 +1033,9 @@ async function runPipeline() {
   }
 
   const p = launchParams && launchParams.asr_backend ? launchParams : appSettings;
+  // Сервер шлёт два done, когда в запуске запрошен перевод: первое — как
+  // только транскрибация готова, второе — после перевода результата.
+  expectedDones = p.translate ? 2 : 1;
   // Галочки: отмеченные файлы транскрибируются, снятые — пропускаются.
   // Если не отмечен ни один — обрабатываем все.
   let selected = files.filter(f => fileChecked[f.name] !== false);
@@ -923,6 +1050,11 @@ async function runPipeline() {
   formData.append('timestamps', p.timestamps ? '1' : '0');
   formData.append('backend', p.asr_backend || 'whisper_base');
   formData.append('use_gpu', p.use_gpu ? '1' : '0');
+  formData.append('translate', p.translate ? '1' : '0');
+  if (p.translate) {
+    formData.append('translate_lang', p.translate_lang || 'en');
+    formData.append('translate_name', p.translate_name || '');
+  }
 
   const ctx = document.getElementById('context-prompt').value.trim();
   if (ctx) formData.append('initial_prompt', ctx);
@@ -934,11 +1066,18 @@ async function runPipeline() {
   resetResult();
   showLivePanel();
 
-  // сбросить статусы: выбранные — в очередь, снятые — «Пропущено»
+  // сбросить статусы: выбранные — в очередь, остальные — «Пропущено»,
+// НО уже обработанные (есть текст) остаются «Готово». Текст и бейдж
+// невыбранных файлов не трогаем — результат сохраняется при выборе.
   for (const f of files) {
-    fileStatuses[f.name] = selected.includes(f) ? 'queued' : 'skipped';
-    fileTexts[f.name] = '';
-    fileBadges[f.name] = 'Черновик';
+    if (selected.includes(f)) {
+      fileStatuses[f.name] = 'queued';
+      fileTexts[f.name] = '';
+      fileBadges[f.name] = 'Черновик';
+    } else {
+      fileStatuses[f.name] = fileTexts[f.name] ? 'done' : 'skipped';
+      if (!fileTexts[f.name]) fileBadges[f.name] = 'Черновик';
+    }
   }
   renderFileList();
 
@@ -1008,23 +1147,21 @@ function handleEvent(msg) {
         setStreamingText(msg.text);
       }
       if (msg.final && enhanceMode !== 'auto') {
-        syncEnhanceButton();
+        syncRefineButton();
       }
       if (msg.final) {
-        syncTranslateButton();
+        syncRefineButton();
       }
       break;
     }
 
     case 'enhancing':
-      showEnhanceProgress(msg.active_pass, msg.total_passes);
+      showRefineProgress(msg.active_pass, msg.total_passes);
       if (msg.active_pass === 1) {
         // Проход 1 начался: черновик whisper уже показан мгновенно —
         // просто выравниваем окно по полному тексту.
-        const el = document.getElementById('result-text');
         const draft = fileTexts[liveFile] || '';
-        el.textContent = draft;
-        el.scrollTop = el.scrollHeight;
+        renderResultText(draft);
       } else if (lastPassText != null) {
         // предыдущий проход завершён — его полный текст мы уже получили,
         // плавно переходим: мигание → затухание → появление
@@ -1046,13 +1183,14 @@ function handleEvent(msg) {
     case 'result':
       if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
       fileTexts[msg.filename] = msg.text;
-      fileBadges[msg.filename] = 'Улучшено ИИ';
+      fileBadges[msg.filename] = msg.lang
+        ? `Переведено (${msg.lang.toUpperCase()})`
+        : 'Улучшено ИИ';
       if (!followFile(msg.filename)) { renderFileList(); break; }
       setLiveFile(msg.filename);
-      hideEnhanceProgress();
+      hideRefineProgress();
       startPassTransition(msg.text);
-      syncEnhanceButton();
-      syncTranslateButton();
+      syncRefineButton();
       break;
 
     case 'file_status':
@@ -1084,7 +1222,7 @@ function handleEvent(msg) {
       break;
 
     case 'transcribing':
-      hideEnhanceProgress();
+      hideRefineProgress();
       break;
 
     case 'busy':
@@ -1105,6 +1243,15 @@ function handleEvent(msg) {
       addLog('✅ ' + msg.message);
       addLog('📁 Результаты сохранены в папке "output"');
       document.getElementById('skip-btn').style.display = 'none';
+      // При переводе в запуске сервер шлёт два done: первое — из pipeline
+      // (транскрибация завершена), второе — после перевода. На первом done
+      // НЕ закрываем EventSource, иначе событие result с переведённым
+      // текстом не дойдёт до клиента и окно останется с русским черновиком.
+      if (expectedDones > 1) {
+        expectedDones = 1;
+        if (enhanceMode !== 'auto') awaitSyncAskResult();
+        break;
+      }
       if (enhanceMode !== 'auto') {
         awaitSyncAskResult().then(() => finish());
       } else {
@@ -1141,13 +1288,12 @@ function setLiveFile(name) {
     currentFileName = name;
     // Окно переключили на другой файл — показать ЕГО текст (или пусто),
     // иначе залипает текст предыдущего файла.
-    const text = fileTexts[name] || '';
-    const improved = fileBadges[name] === 'Улучшено ИИ';
-    const tr = fileTranslations[name];
-    if (tr) {
-      setResultText(tr.text, true);
+    const rf = fileRefined[name];
+    if (rf && refinedView[name] !== false) {
+      setResultText(rf.text, true);
     } else {
-      setResultText(text, improved);
+      const text = fileOriginal[name] !== undefined ? fileOriginal[name] : (fileTexts[name] || '');
+      setResultText(text, false);
     }
     renderFileList();
   }
@@ -1194,8 +1340,8 @@ function finish() {
   setBusy(false);
   document.getElementById('skip-btn').style.display = 'none';
   if (enhanceMode === 'auto') {
-    hideEnhanceButton();
-    hideEnhanceProgress();
+    hideRefineButton();
+    hideRefineProgress();
   }
 }
 
@@ -1252,10 +1398,27 @@ function dismissWelcome() {
 
 let lastPassText = null;   // полный текст последнего полученного прохода геммы
 
-function setStreamingText(text) {
+const TS_BADGE_RE = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g;
+let lastPlainResultText = '';  // последний отрисованный текст без HTML — для копирования
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+// Таймкоды [MM:SS]/[HH:MM:SS] рисуем чипсами-статусами; остальной текст
+// экранируем перед вставкой в innerHTML.
+function renderResultText(text) {
+  lastPlainResultText = text;
   const el = document.getElementById('result-text');
-  el.textContent = text;
+  const esc = escapeHtml(text);
+  el.innerHTML = esc.replace(TS_BADGE_RE, '<span class="ts-badge">$1</span>');
   el.scrollTop = el.scrollHeight;
+}
+
+function setStreamingText(text) {
+  renderResultText(text);
 }
 
 function resetTyping() {
@@ -1269,9 +1432,7 @@ function resetTyping() {
 }
 
 function finishStreaming(text, improved) {
-  const el = document.getElementById('result-text');
-  el.textContent = text;
-  el.scrollTop = el.scrollHeight;
+  renderResultText(text);
 }
 
 /* ── Live panel ──────────────────────────────────────────── */
@@ -1285,41 +1446,36 @@ function resetResult() {
   currentFileName = null;
   liveFile = null;
   userPinnedFile = null;
-  hideEnhanceButton();
-  hideEnhanceStatus();
-  hideEnhanceProgress();
+  hideRefineButton();
+  hideRefineStatus();
+  hideRefineProgress();
   setResultText('', false);
-  document.getElementById('translate-btn').style.display = 'none';
-  document.getElementById('translate-lang').style.display = 'none';
-  const resetBtn = document.getElementById('translate-reset-btn');
-  if (resetBtn) resetBtn.style.display = 'none';
-
+  const overlay = document.getElementById('refine-overlay');
+  if (overlay) overlay.style.display = 'none';
 }
 
 
 
 function setResultText(text, improved) {
   resetTyping();
-  const el = document.getElementById('result-text');
-  el.textContent = text;
-
+  renderResultText(text);
 }
 
-function showEnhanceProgress(activePass, totalPasses) {
-  renderEnhanceProgress(activePass, totalPasses);
+function showRefineProgress(activePass, totalPasses) {
+  renderRefineProgress(activePass, totalPasses);
 }
 
-function renderEnhanceProgress(activePass, totalPasses) {
-  const wrap = document.getElementById('enhance-progress');
+function renderRefineProgress(activePass, totalPasses) {
+  const wrap = document.getElementById('refine-progress');
   wrap.style.display = 'flex';
-  const bar = document.getElementById('enhance-progress-bar');
+  const bar = document.getElementById('refine-progress-bar');
   bar.style.width = `${Math.round((activePass / totalPasses) * 100)}%`;
-  document.getElementById('enhance-progress-label').textContent =
+  document.getElementById('refine-progress-label').textContent =
     `Проход ${activePass}/${totalPasses}`;
 }
 
-function hideEnhanceProgress() {
-  document.getElementById('enhance-progress').style.display = 'none';
+function hideRefineProgress() {
+  document.getElementById('refine-progress').style.display = 'none';
 }
 
 /* ── Переход между проходами геммы: мигание → затухание → появление ── */
@@ -1340,8 +1496,7 @@ function startPassTransition(newText) {
     passTransitionTimer = setTimeout(() => {
       // 3. появляется полный текст нового прохода
       el.classList.remove('pass-fade-out');
-      el.textContent = newText;
-      el.scrollTop = el.scrollHeight;
+      renderResultText(newText);
       el.classList.add('pass-fade-in');
       passTransitionTimer = setTimeout(() => {
         el.classList.remove('pass-fade-in');
@@ -1351,53 +1506,41 @@ function startPassTransition(newText) {
   }, 5000);
 }
 
-let enhanceBusy = false;
-let enhanceAbort = null;       // AbortController активного улучшения
-let enhanceCancelling = false; // пользователь нажал «Остановить улучшение»
-
-function onEnhanceClick() {
-  if (enhanceBusy) {
-    cancelEnhance();
-  } else {
-    enhanceDraft();
-  }
-}
-
-// Прерывает идущее улучшение: рвёт HTTP-запрос и сигналит серверу (llama стопает генерацию).
-async function cancelEnhance() {
-  if (!enhanceBusy || !taskId || !currentFileName) return;
-  enhanceCancelling = true;
-  if (enhanceAbort) enhanceAbort.abort();
+// Прерывает идущее улучшение/перевод: рвёт HTTP-запрос и сигналит серверу (llama стопает генерацию).
+async function cancelRefine() {
+  if (!refineBusy || !taskId || !currentFileName) return;
+  refineCancelling = true;
+  if (refineAbort) refineAbort.abort();
   try {
     await fetch(
-      `/api/enhance/cancel/${taskId}/${encodeURIComponent(currentFileName)}`,
+      `/api/refine/cancel/${taskId}/${encodeURIComponent(currentFileName)}`,
       { method: 'POST' }
     );
   } catch (e) { /* не критично — HTTP уже прерван */ }
 }
 
-function showEnhanceStatus(text) {
-  const st = document.getElementById('enhance-status');
+function showRefineStatus(text) {
+  const st = document.getElementById('refine-status');
   st.textContent = text;
   st.style.display = '';
-  document.getElementById('enhance-btn').style.display = 'none';
+  document.getElementById('refine-btn').style.display = 'none';
 }
 
-function hideEnhanceStatus() {
-  document.getElementById('enhance-status').style.display = 'none';
+function hideRefineStatus() {
+  document.getElementById('refine-status').style.display = 'none';
 }
 
-function showEnhanceButton() {
-  document.getElementById('enhance-btn').style.display = '';
-  hideEnhanceStatus();
+function showRefineButton() {
+  document.getElementById('refine-btn').style.display = '';
+  hideRefineStatus();
 }
 
-function hideEnhanceButton() {
-  document.getElementById('enhance-btn').style.display = 'none';
+function hideRefineButton() {
+  document.getElementById('refine-btn').style.display = 'none';
 }
 
 function copyResult() {
-  const text = document.getElementById('result-text').textContent;
+  const text = lastPlainResultText || document.getElementById('result-text').textContent;
   if (!text) return;
   if (navigator.clipboard) {
     navigator.clipboard.writeText(text).then(() => addLog('📋 Текст скопирован'));
@@ -1406,11 +1549,73 @@ function copyResult() {
   }
 }
 
-async function enhanceDraft() {
-  if (!taskId || !currentFileName || enhanceBusy) return;
-  // Модель ИИ не установлена — предложить скачать, как в кнопке «Перевести».
+// Какие операции уже были применены к тексту файла (при запуске или вручную).
+function refineStateFor(name) {
+  const rf = fileRefined[name];
+  const badge = fileBadges[name] || '';
+  const wasImproved = !!(rf && rf.improved) || badge === 'Улучшено ИИ';
+  const wasTranslated = !!(rf && rf.lang) || /^Переведено/i.test(badge);
+  return { wasImproved, wasTranslated };
+}
+
+function openRefineModal() {
+  if (!taskId || !currentFileName || refineBusy) return;
+  const improveCb = document.getElementById('refine-improve');
+  const translateCb = document.getElementById('refine-translate');
+  const applyBtn = document.getElementById('refine-apply');
+  const { wasImproved, wasTranslated } = refineStateFor(currentFileName);
+  improveCb.disabled = wasImproved;
+  translateCb.disabled = wasTranslated;
+  // Предлагаем по умолчанию только доступное действие.
+  improveCb.checked = !wasImproved;
+  translateCb.checked = false;
+  const ih = document.getElementById('refine-improve-hint');
+  if (ih) {
+    ih.textContent = wasImproved
+      ? 'Этот текст уже улучшен с ИИ — повторное улучшение недоступно.'
+      : 'ИИ перепишет текст: уберёт слова-паразиты, исправит орфографию и пунктуацию, приведёт к чистому стилю.';
+  }
+  const th = document.getElementById('refine-translate-hint');
+  if (th) {
+    th.textContent = wasTranslated
+      ? 'Этот текст уже переведён — повторный перевод недоступен.'
+      : 'Перевести текст на выбранный язык (только при галочке «Перевести»).';
+  }
+  if (applyBtn) applyBtn.disabled = wasImproved && wasTranslated;
+  document.getElementById('refine-overlay').style.display = '';
+}
+
+function closeRefineModal() {
+  document.getElementById('refine-overlay').style.display = 'none';
+}
+
+// Единая операция «Улучшить текст»: улучшить с ИИ и/или перевести.
+async function refineDraft() {
+  if (!taskId || !currentFileName || refineBusy) return;
+  const improveCb = document.getElementById('refine-improve');
+  const translateCb = document.getElementById('refine-translate');
+  const improve = !!(improveCb.checked && !improveCb.disabled);
+  const translate = !!(translateCb.checked && !translateCb.disabled);
+  if (!improve && !translate) {
+    addLog('⚠ Выберите хотя бы одно действие (улучшить или перевести)');
+    return;
+  }
+  closeRefineModal();
+  let lang = null, langName = null;
+  if (translate) {
+    const sel = document.getElementById('refine-lang');
+    lang = sel ? sel.value : 'en';
+    langName = sel && sel.selectedOptions && sel.selectedOptions[0]
+      ? sel.selectedOptions[0].textContent
+      : lang;
+  }
+  const name = currentFileName;
+  // Запоминаем исходную расшифровку до перезаписи (SSE 'result' придёт раньше
+  // ответа fetch и заменит fileTexts). Нужно для кнопки «вернуть транскрибацию».
+  if (fileOriginal[name] === undefined) fileOriginal[name] = fileTexts[name] || '';
+  // Модель ИИ не установлена — предложить скачать (нужна и для улучшения, и для перевода).
   if (!gemmaInstalled) {
-    offerLlmDownload(() => enhanceDraft());
+    offerLlmDownload(() => refineDraft());
     return;
   }
   // задача уже завершена и SSE закрыт (finish) — переподключаемся,
@@ -1418,81 +1623,79 @@ async function enhanceDraft() {
   if (!eventSource) {
     connectSSE(taskId);
   }
-  const prevTr = fileTranslations[currentFileName]; // был перевод — обновим после улучшения
-  const retranslate = !!(prevTr && prevTr.lang);
-  enhanceCancelling = false;
-  enhanceBusy = true;
-  enhanceAbort = new AbortController();
-  hideEnhanceStatus();           // статус «Улучшаем…» заменяет кнопка «Остановить улучшение»
-  showEnhanceProgress(1, 3);
+  refineCancelling = false;
+  refineBusy = true;
+  refineAbort = new AbortController();
+  hideRefineStatus();
+  if (improve) showRefineProgress(1, 3);
   fileStatuses[currentFileName] = 'enhancing';
   fileBadges[currentFileName] = 'Обработка';
-  syncEnhanceButton();
-  syncTranslateButton(); // во время улучшения кнопку «Перевести» скрываем
+  syncRefineButton();
   renderFileList();
-  let enhanceOk = false;
+  let ok = false;
   try {
-    const resp = await fetch(`/api/enhance/${taskId}/${encodeURIComponent(currentFileName)}`, {
-      method: 'POST',
-      signal: enhanceAbort.signal,
-    });
+    const resp = await fetch(
+      `/api/refine/${taskId}/${encodeURIComponent(name)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: refineAbort.signal,
+        body: JSON.stringify({ improve, language_code: lang, language_name: langName }),
+      }
+    );
     const data = await resp.json();
     if (data.error) {
       addLog(`❌ ${data.error}`);
       if (/LLM|модель|gemma|ИИ/i.test(data.error)) {
-        offerLlmDownload(() => enhanceDraft());
+        offerLlmDownload(() => refineDraft());
         return;
       }
     } else {
-      enhanceOk = true;
-      fileTexts[currentFileName] = data.text;
-      fileBadges[currentFileName] = 'Улучшено ИИ';
-      hideEnhanceProgress();
+      ok = true;
+      refinedView[name] = true;
+      fileRefined[name] = {
+        improved: improve,
+        lang,
+        langName: data.language_name || langName || lang,
+        text: data.text,
+        outputPath: data.output_path,
+      };
+      if (translate) fileBadges[name] = `Переведено (${lang.toUpperCase()})`;
+      else fileBadges[name] = 'Улучшено ИИ';
+      hideRefineProgress();
       setResultText(data.text, true);
-      addLog('✅ Текст улучшен и перезаписан');
+      if (translate) addLog(`✅ Перевод (${langName}): ${data.output_path}`);
+      else addLog(`✅ Текст улучшен: ${data.output_path}`);
     }
   } catch (err) {
     if (err && err.name === 'AbortError') {
-      addLog('⏹ Улучшение остановлено');
+      refineError = '';
+      addLog('⏹ Обработка остановлена');
     } else {
+      refineError = err.message;
       addLog(`❌ ${err.message}`);
     }
   } finally {
-    enhanceBusy = false;
-    enhanceAbort = null;
-    enhanceCancelling = false;
-    hideEnhanceProgress();
-    fileStatuses[currentFileName] = 'done';
+    refineBusy = false;
+    refineAbort = null;
+    refineCancelling = false;
+    hideRefineProgress();
+    fileStatuses[name] = 'done';
     renderFileList();
-    if (enhanceOk) {
-      if (retranslate) {
-        // был перевод — автоматически переводим улучшенный текст на тот же язык
-        // (сервер уже хранит улучшенный текст в result.text — отдельный вызов translate)
-        syncEnhanceButton();
-        syncTranslateButton();
+    if (ok) {
+      refineError = '';
+      syncRefineButton();
+    } else if (refineError) {
+      syncRefineButton();
+      if (/LLM|модель|gemma|ИИ/i.test(refineError)) {
+        offerLlmDownload(() => refineDraft());
       } else {
-        // успешно улучшенный файл: показываем не-кликабельный статус
-        showEnhanceStatus('Улучшено с ИИ');
-        syncTranslateButton();
+        showRefineStatus(`⚠ Не выполнено (${refineError})`);
       }
     } else {
-      // ошибка/отмена улучшения — вернуть кнопку, можно повторить
-      syncEnhanceButton();
-      syncTranslateButton();
+      syncRefineButton();
     }
   }
-  if (enhanceOk && retranslate) {
-    await doTranslate(prevTr.lang, prevTr.langName || prevTr.lang);
-  }
-}
-
-function openTranslateModal() {
-  if (!taskId || !currentFileName || translateBusy) return;
-  document.getElementById('translate-overlay').style.display = '';
-}
-
-function closeTranslateModal() {
-  document.getElementById('translate-overlay').style.display = 'none';
 }
 
 // Предложение скачать модель ИИ (gemma), если она нужна для перевода.
@@ -1587,108 +1790,6 @@ function pollLlmInstall() {
   }, 2500);
 }
 
-async function translateDraft() {
-  if (!taskId || !currentFileName || translateBusy) return;
-  closeTranslateModal();
-  const sel = document.getElementById('translate-lang');
-  const lang = sel ? sel.value : 'en';
-  const langName = sel && sel.selectedOptions && sel.selectedOptions[0]
-    ? sel.selectedOptions[0].textContent
-    : lang;
-  await doTranslate(lang, langName);
-}
-
-// Переводит текущий файл на язык (lang/langName) и показывает результат.
-// Возвращает true при успехе. Используется и по кнопке перевода, и для
-// автоматического перевода улучшенного текста после «Улучшить с ИИ».
-async function doTranslate(lang, langName) {
-  if (!taskId || !currentFileName || translateBusy) return false;
-  translateError = '';
-  translateCancelling = false;
-  translateBusy = true;
-  translateAbort = new AbortController();
-  fileStatuses[currentFileName] = 'enhancing'; // «Обработка» в списке файлов
-  hideEnhanceStatus();
-  syncTranslateButton();
-  syncEnhanceButton(); // во время перевода кнопку «Улучшить» скрываем
-  renderFileList();
-  let ok = false;
-  try {
-    const resp = await fetch(
-      `/api/translate/${taskId}/${encodeURIComponent(currentFileName)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: translateAbort.signal,
-        body: JSON.stringify({ language_code: lang, language_name: langName }),
-      }
-    );
-    const data = await resp.json();
-    if (data.error) {
-      addLog(`❌ ${data.error}`);
-      throw new Error(data.error);
-    } else {
-      ok = true;
-      const name = currentFileName;
-      fileTranslations[name] = {
-        lang,
-        langName: data.language_name || langName || lang,
-        text: data.text,
-        outputPath: data.output_path,
-      };
-      fileStatuses[name] = 'done';
-      setResultText(data.text, true);
-      addLog(`✅ Перевод (${langName}): ${data.output_path}`);
-    }
-  } catch (err) {
-    if (err && err.name === 'AbortError') {
-      translateError = '';
-      addLog('⏹ Перевод отменён');
-    } else {
-      translateError = err.message;
-      addLog(`❌ ${err.message}`);
-    }
-  } finally {
-    translateBusy = false;
-    translateAbort = null;
-    translateCancelling = false;
-    fileStatuses[currentFileName] = 'done';
-    renderFileList();
-    if (ok) {
-      translateError = '';
-      syncEnhanceButton();
-      syncTranslateButton();
-    } else if (translateError) {
-      // ошибка перевода — вернуть кнопку, можно повторить; показать причину
-      syncEnhanceButton();
-      syncTranslateButton();
-      if (/LLM|модель|gemma|ИИ/i.test(translateError)) {
-        offerLlmDownload(() => doTranslate(lang, langName));
-      } else {
-        showEnhanceStatus(`⚠ Перевод не выполнен (${translateError})`);
-      }
-    } else {
-      // отменено пользователем — просто вернуть кнопку
-      syncEnhanceButton();
-      syncTranslateButton();
-    }
-  }
-  return ok;
-}
-
-// Прерывает идущий перевод: рвёт HTTP-запрос и сигналит серверу (llama стопает генерацию).
-async function cancelTranslate() {
-  if (!translateBusy || !taskId || !currentFileName) return;
-  translateCancelling = true;
-  if (translateAbort) translateAbort.abort();
-  try {
-    await fetch(
-      `/api/translate/cancel/${taskId}/${encodeURIComponent(currentFileName)}`,
-      { method: 'POST' }
-    );
-  } catch (e) { /* не критично — HTTP уже прерван */ }
-}
-
 async function awaitSyncAskResult() {
   if (!taskId) return;
   try {
@@ -1697,13 +1798,23 @@ async function awaitSyncAskResult() {
     const results = data.results || [];
     if (results.length > 0) {
       const first = results[0];
+      // Не затираем переведённый/улучшенный текст: после перевода задача
+      // приходит «done» повторно, и синк этой «догонялки» не должен
+      // возвращать на экран исходный черновик вместо перевода.
+      // Проверяем и до, и после fetch — fetch асинхронный, и за время
+      // ожидания переведённый result мог уже дойти по SSE.
+      const badge = (fileBadges[currentFileName] || '');
+      const alreadyRefined = badge === 'Переведено (EN)' || badge === 'Переведено (RU)'
+        || /^Переведено/.test(badge) || fileRefined[currentFileName];
+      if (alreadyRefined) return;
       currentFileName = first.filename;
+      const b2 = (fileBadges[currentFileName] || '');
+      if (/^Переведено/.test(b2) || fileRefined[currentFileName]) return;
       fileTexts[currentFileName] = first.text;
       fileBadges[currentFileName] = 'Черновик (Whisper)';
       if (first.text) {
         setResultText(first.text, false);
-        syncEnhanceButton();
-        syncTranslateButton();
+        syncRefineButton();
       }
       renderFileList();
     }

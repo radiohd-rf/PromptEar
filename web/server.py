@@ -241,14 +241,15 @@ def _process_files(task_id: str) -> None:
         enhancer = None
         enhancer = create_enhancer()
         llm_ok, model_ok = enhancer.is_available()
+        need_llm = config.enhance_mode == "auto" or bool(task.get("translate_lang"))
         if (
             not llm_ok
             and model_ok
-            and config.enhance_mode == "auto"
+            and need_llm
             and hasattr(enhancer, "start_server")
         ):
             # Движок могли погасить после простоя — поднимаем лениво,
-            # иначе auto-режим молча пропустит улучшение.
+            # иначе auto-режим/перевод молча пропустит улучшение/перевод.
             emit(LogEvent("LLM-движок не запущен — запускаем..."))
             try:
                 if enhancer.start_server():
@@ -257,7 +258,7 @@ def _process_files(task_id: str) -> None:
                 emit(LogEvent(f"Не удалось запустить LLM-движок: {exc}"))
         emit(LlmReadyEvent(llm_ok=llm_ok, model_ok=model_ok))
         config.llm_available = llm_ok and model_ok
-        if config.llm_available and config.enhance_mode == "auto":
+        if config.llm_available and need_llm:
             # Движок понадобится в конце задачи — запрещаем гашение простоем.
             enhancer_mod.pin_llama_server()
 
@@ -286,6 +287,19 @@ def _process_files(task_id: str) -> None:
             skip_requested=skip_requested,
         )
 
+        # Разовый перевод результата (модал запуска): транскрибация →
+        # (улучшение в auto) → перевод. Перевод перезаписывает единственный
+        # файл результата — в папке остаётся один документ на источник.
+        tr_lang = task.get("translate_lang") or ""
+        if tr_lang:
+            if not config.llm_available:
+                emit(LogEvent("⚠ Перевод отменён: LLM-движок недоступен"))
+            else:
+                _translate_pipeline_results(
+                    task_id, task, enhancer, emit, cancel, tr_lang
+                )
+            task["translate_lang"] = ""  # на молчаливый повтор не влияет
+
         emit(DoneEvent("Готово"))
 
     except Exception as exc:
@@ -307,6 +321,85 @@ def _process_files(task_id: str) -> None:
                 p.unlink(missing_ok=True)
         shutil.rmtree(TEMP_DIR / task_id, ignore_errors=True)
         emit_queue.put_nowait({"type": "__done__"})
+
+
+def _translate_pipeline_results(
+    task_id: str,
+    task: dict,
+    enhancer,
+    emit,
+    cancel,
+    lang_code: str,
+) -> None:
+    """Переводит каждый готовый результат задачи (модал запуска «Перевести»).
+
+    Перевод перезаписывает ЕДИНСТВЕННЫЙ файл результата (result.output_path) —
+    исходя из параметров запуска в папке остаётся один документ на источник.
+    Шлёт SSE-событие result с полем lang; state текста тоже обновляется,
+    чтобы /api/results возвращал перевод, а не исходный черновик.
+    """
+    emit_queue = task["queue"]
+    lang_name = task.get("translate_name") or lang_code
+    use_ts = bool(task.get("timestamps"))
+    output_format = task.get("output_format", "docx")
+
+    for _key, result in list(task.get("results", {}).items()):
+        display = result.audio.display_name or result.audio.path.name
+        source = strip_ts_markers(result.text)
+        if not source or not source.strip():
+            emit(LogEvent(f"⏭ Нет текста для перевода: {display}"))
+            continue
+        emit(LogEvent(f"🌐 Перевод: {display} → {lang_name}..."))
+        try:
+            translated = enhancer.translate(
+                source,
+                lang_code,
+                language_name=lang_name,
+                cancel=cancel,
+            )
+        except Exception as exc:
+            emit(LogEvent(f"⚠ Не удалось перевести {display}: {exc}"))
+            continue
+        if cancel.is_set():
+            break
+        if not translated or not translated.strip():
+            emit(LogEvent(f"⚠ Пустой результат перевода: {display}"))
+            continue
+        if use_ts and result.segments is not None:
+            translated = ensure_timestamps(result.segments, translated)
+
+        out_path = result.output_path or (
+            (result.audio.original_path or result.audio.path).with_suffix(
+                f".{output_format}"
+            )
+        )
+        if output_format.lower() in ("srt", "vtt") and result.segments is not None:
+            out_path.write_text(
+                translated_subtitles(result.segments, translated, output_format),
+                encoding="utf-8",
+            )
+        elif output_format.lower() == "docx":
+            save_docx(out_path, translated)
+        else:
+            save_text_output(
+                out_path,
+                output_format,
+                translated,
+                segments=result.segments,
+                duration=result.duration_sec,
+            )
+        result.text = translated
+        task.setdefault("refined_paths", {})[display] = str(out_path)
+        emit(LogEvent(f"✅ Перевод сохранён: {out_path.name}"))
+        ev = {
+            "type": "result",
+            "filename": display,
+            "text": translated,
+            "lang": lang_code,
+        }
+        with contextlib.suppress(queue.Full):
+            emit_queue.put_nowait(ev)
+        logger.info(f"[{task_id}] {json.dumps(ev, ensure_ascii=False)}")
 
 
 @app.route("/")
@@ -374,6 +467,12 @@ def upload_files():
         launch_patch["use_gpu"] = use_gpu_val == "1"
     if ai is not None:
         launch_patch["ai_enabled"] = ai == "1"
+    # Разовый перевод результата (в pipeline: транскрибация → (улучшение) → перевод).
+    translate_on = request.form.get("translate") == "1"
+    translate_lang = (request.form.get("translate_lang") or "").strip().lower()
+    translate_name = (request.form.get("translate_name") or "").strip()
+    if translate_on and not translate_lang:
+        translate_on = False
     settings_store.save({k: v for k, v in launch_patch.items() if v is not None})
 
     task_id = uuid.uuid4().hex[:12]
@@ -424,6 +523,8 @@ def upload_files():
         "output_format": request.form.get("output_format", "docx"),
         "enhance_mode": enhance_mode,
         "timestamps": request.form.get("timestamps") == "1",
+        "translate_lang": translate_lang if translate_on else "",
+        "translate_name": translate_name if translate_on else "",
         "output_dir": UPLOAD_DIR,
         "original_videos": original_videos,
         "display_names": display_names,
@@ -545,9 +646,16 @@ def _ensure_llm(enhancer) -> tuple[bool, str | None]:
     return False, get_llm_error() or "LLM недоступен"
 
 
-@app.route("/api/enhance/<task_id>/<filename>", methods=["POST"])
-def enhance_file(task_id, filename):
-    """Улучшает уже сохранённый черновик (режим ask) и перезаписывает файл."""
+@app.route("/api/refine/<task_id>/<filename>", methods=["POST"])
+def refine_file(task_id, filename):
+    """Улучшает с ИИ и/или переводит сохранённый черновик (режим ask).
+
+    Тело запроса: {"improve": bool, "language_code": "en", "language_name": "Английский"}.
+    Исходная расшифровка не перезаписывается — результат пишется отдельным файлом:
+    "улучшенный-{stem}.{fmt}", "улучшенный-{stem}-{LANG}.{fmt}" (улучшение+перевод),
+    "переведённый-{stem}-{LANG}.{fmt}" (только перевод). Для srt/vtt текст
+    раскладывается по сегментам с таймкодами.
+    """
     from threading import Event
 
     task = tasks.get(task_id)
@@ -565,6 +673,14 @@ def enhance_file(task_id, filename):
     if result is None:
         return jsonify({"error": "file result not found"}), 404
 
+    data = request.get_json(silent=True) or {}
+    improve = bool(data.get("improve"))
+    language_code = (data.get("language_code") or "").strip().lower()
+    language_name = (data.get("language_name") or "").strip()
+    translate = bool(language_code)
+    if not improve and not translate:
+        return jsonify({"error": "ничего не выбрано: улучшить или перевести"}), 400
+
     try:
         enhancer = create_enhancer()
         ready, err = _ensure_llm(enhancer)
@@ -574,7 +690,6 @@ def enhance_file(task_id, filename):
         return jsonify({"error": str(exc)}), 409
 
     cancel = Event()
-    elapsed_passes = {"n": 0}
     task_queue = task.get("queue")
 
     def mp_progress(msg: str) -> None:
@@ -582,7 +697,6 @@ def enhance_file(task_id, filename):
 
         m = re.match(r"проход (\d)/(\d)", msg, re.IGNORECASE)
         if m:
-            elapsed_passes["n"] += 1
             ev = {
                 "type": "enhancing",
                 "active_pass": int(m.group(1)),
@@ -606,167 +720,107 @@ def enhance_file(task_id, filename):
                 task_queue.put_nowait(ev)
         logger.info(f"[{task_id}] {json.dumps(ev, ensure_ascii=False)}")
 
+    def emit_result(text: str) -> None:
+        ev = {
+            "type": "result",
+            "filename": filename,
+            "text": text,
+            "lang": language_code if translate else None,
+        }
+        with contextlib.suppress(queue.Full):
+            if task_queue is not None:
+                task_queue.put_nowait(ev)
+        logger.info(f"[{task_id}] {json.dumps(ev, ensure_ascii=False)}")
+
     original = result.text
-    _ecancel_key = f"{task_id}\0{filename}"
-    with _enhance_cancels_lock:
-        _enhance_cancels[_ecancel_key] = cancel
+    use_ts = bool(task.get("timestamps")) and result.segments is not None
+    _key = f"{task_id}\0{filename}"
+    with _refine_cancels_lock:
+        _refine_cancels[_key] = cancel
+    final_text = original
     try:
-        use_ts = bool(task.get("timestamps")) and result.segments is not None
-        # Если включены таймкоды — подаём модели размеченный текст,
-        # чтобы Gemma сама держала / переносила метки вместе с фрагментами.
-        enhance_input = original
-        if use_ts:
-            enhance_input = ensure_timestamps(result.segments, original)
-        new_text = enhancer.enhance_multi_pass(
-            enhance_input,
-            task.get("initial_prompt", "") or "",
-            progress_callback=mp_progress,
-            cancel=cancel,
-            stream_callback=mp_stream,
-            timestamps=use_ts,
-        )
-        if cancel.is_set():
-            # пользователь остановил улучшение — не трогаем result.text и файл
-            return jsonify({"error": "Улучшение отменено"}), 499
-        if use_ts:
-            new_text = ensure_timestamps(result.segments, new_text)
-        result.text = new_text
-    except Exception as exc:
-        return jsonify({"error": f"Ошибка улучшения: {exc}"}), 500
-    finally:
-        with _enhance_cancels_lock:
-            _enhance_cancels.pop(_ecancel_key, None)
-
-    filepath = result.audio.original_path or result.audio.path
-    out_dir = task.get("output_dir") or filepath.parent
-    out_path = Path(out_dir) / f"{filepath.stem}.{task.get('output_format', 'docx')}"
-    text_to_save = result.text
-    if (
-        task.get("timestamps")
-        and task.get("output_format", "docx").lower() not in ("srt", "vtt")
-        and result.segments is not None
-    ):
-        text_to_save = ensure_timestamps(result.segments, result.text)
-    if out_path.suffix.lower() == ".docx":
-        save_docx(out_path, text_to_save)
-    else:
-        save_text_output(
-            out_path,
-            task.get("output_format", "docx"),
-            text_to_save,
-            segments=result.segments,
-            duration=result.duration_sec,
-        )
-    result.output_path = out_path
-    return jsonify({"text": text_to_save, "output_path": str(out_path)})
-
-
-@app.route("/api/translate/<task_id>/<filename>", methods=["POST"])
-def translate_file(task_id, filename):
-    """Переводит сохранённый результат на указанный язык и пишет отдельный файл.
-
-    Тело запроса: {"language_code": "en", "language_name": "Английский"}.
-    Файл результата сохраняется как `{stem}-{language_code}.{output_format}`
-    (для srt/vtt перевод раскладывается по сегментам с таймкодами).
-    """
-    from threading import Event
-
-    task = tasks.get(task_id)
-    if not task:
-        return jsonify({"error": "task not found"}), 404
-
-    result = next(
-        (
-            r
-            for r in task.get("results", {}).values()
-            if (r.audio.display_name or r.audio.path.name) == filename
-        ),
-        None,
-    )
-    if result is None:
-        return jsonify({"error": "file result not found"}), 404
-
-    data = request.get_json(silent=True) or {}
-    language_code = (data.get("language_code") or "").strip().lower()
-    language_name = (data.get("language_name") or "").strip()
-    if not language_code:
-        return jsonify({"error": "language_code не указан"}), 400
-
-    try:
-        enhancer = create_enhancer()
-        ready, err = _ensure_llm(enhancer)
-        if not ready:
-            return jsonify({"error": err or "LLM недоступен"}), 409
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 409
-
-    cancel = Event()
-    _cancel_key = f"{task_id}\0{filename}"
-    with _translate_cancels_lock:
-        _translate_cancels[_cancel_key] = cancel
-
-    try:
-        # Переводим исходный текст без (уже устаревших) таймкод-меток Whisper:
-        # перевод должен быть чистым, метки всё равно не соответствуют его длине.
-        source_text = strip_ts_markers(result.text)
-        try:
-            translated = enhancer.translate(
-                source_text,
-                language_code,
-                language_name=language_name,
+        if improve:
+            # Если включены таймкоды — подаём модели размеченный текст,
+            # чтобы Gemma сохраняла / переносила метки вместе с фрагментами.
+            enhance_input = strip_ts_markers(original)
+            if use_ts:
+                enhance_input = ensure_timestamps(result.segments, enhance_input)
+            final_text = enhancer.enhance_multi_pass(
+                enhance_input,
+                task.get("initial_prompt", "") or "",
+                progress_callback=mp_progress,
                 cancel=cancel,
+                stream_callback=mp_stream,
+                timestamps=use_ts,
             )
-        except NotImplementedError as exc:
-            return jsonify({"error": str(exc)}), 400
-        except Exception as exc:
-            return jsonify({"error": f"Ошибка перевода: {exc}"}), 500
+            if cancel.is_set():
+                return jsonify({"error": "Обработка отменена"}), 499
+            if use_ts:
+                final_text = ensure_timestamps(result.segments, final_text)
+        if translate:
+            # Переводим актуальный текст (улучшенный или исходный черновик),
+            # но без меток Whisper: перевод должен быть чистым.
+            source_text = strip_ts_markers(final_text)
+            try:
+                translated = enhancer.translate(
+                    source_text,
+                    language_code,
+                    language_name=language_name,
+                    cancel=cancel,
+                )
+            except NotImplementedError as exc:
+                return jsonify({"error": str(exc)}), 400
+            except Exception as exc:
+                return jsonify({"error": f"Ошибка перевода: {exc}"}), 500
+            if cancel.is_set():
+                return jsonify({"error": "Обработка отменена"}), 499
+            if not translated or not translated.strip():
+                return jsonify({"error": "Пустой результат перевода"}), 500
+            if use_ts:
+                translated = ensure_timestamps(result.segments, translated)
+            final_text = translated
+    except Exception as exc:
+        return jsonify({"error": f"Ошибка: {exc}"}), 500
     finally:
-        with _translate_cancels_lock:
-            _translate_cancels.pop(_cancel_key, None)
-
-    if cancel.is_set():
-        return jsonify({"error": "Перевод отменён"}), 499
-
-    if not translated or not translated.strip():
-        return jsonify({"error": "Пустой результат перевода"}), 500
-
-    # Переведённый текст сам по себе лишён меток (мы подавали в модель чистый
-    # текст). Если включены таймкоды — восстанавливаем метки [MM:SS] на абзацах,
-    # чтобы перевод в окне и в файле был размечен так же, как исходник.
-    if task.get("timestamps") and result.segments:
-        translated = ensure_timestamps(result.segments, translated)
+        with _refine_cancels_lock:
+            _refine_cancels.pop(_key, None)
 
     filepath = result.audio.original_path or result.audio.path
     out_dir = task.get("output_dir") or filepath.parent
     output_format = task.get("output_format", "docx")
-    # имя без расширения исходника → {stem}-{lang}.{fmt}
-    out_path = out_dir / f"{filepath.stem}-{language_code}.{output_format}"
+    if output_format.lower() in ("srt", "vtt") and not result.segments:
+        # без сегментов субтитры невозможны — падаем в обычный текст
+        output_format = "txt"
+    code = language_code.upper() if translate else ""
+    if improve and translate:
+        stem = f"улучшенный-{filepath.stem}-{code}"
+    elif improve:
+        stem = f"улучшенный-{filepath.stem}"
+    else:
+        stem = f"переведённый-{filepath.stem}-{code}"
+    out_path = out_dir / f"{stem}.{output_format}"
 
     if output_format.lower() in ("srt", "vtt"):
-        if result.segments:
-            text_to_save = translated_subtitles(
-                result.segments, translated, output_format
-            )
-            out_path.write_text(text_to_save, encoding="utf-8")
-        else:
-            # нет сегментов — сохраняем как один субтитр-блок на весь текст
-            save_text_output(
-                out_path,
-                output_format,
-                translated,
-                segments=result.segments,
-                duration=result.duration_sec,
-            )
+        text_to_save = translated_subtitles(result.segments, final_text, output_format)
+        out_path.write_text(text_to_save, encoding="utf-8")
     elif out_path.suffix.lower() == ".docx":
-        save_docx(out_path, translated)
+        save_docx(out_path, final_text)
     else:
-        save_text_output(out_path, output_format, translated)
-    task.setdefault("translated_paths", {})[filename] = str(out_path)
+        save_text_output(
+            out_path,
+            output_format,
+            final_text,
+            segments=result.segments,
+            duration=result.duration_sec,
+        )
+    task.setdefault("refined_paths", {})[filename] = str(out_path)
+    emit_result(final_text)
     return jsonify(
         {
-            "text": translated,
+            "text": final_text,
             "output_path": str(out_path),
             "language_name": language_name or language_code,
+            "lang": language_code,
         }
     )
 
@@ -775,7 +829,7 @@ def translate_file(task_id, filename):
 def open_doc(task_id, filename):
     """Открывает готовый документ файла во внешнем редакторе (os.startfile).
 
-    Тело: {"translated": true} — открыть переведённую копию, иначе основной результат.
+    Сначала ищет результат улучшения/перевода (refined_paths), иначе — основной.
     """
     import os
 
@@ -783,10 +837,7 @@ def open_doc(task_id, filename):
     if not task:
         return jsonify({"error": "задача не найдена"}), 404
 
-    data = request.get_json(silent=True) or {}
-    path = None
-    if data.get("translated"):
-        path = task.get("translated_paths", {}).get(filename)
+    path = task.get("refined_paths", {}).get(filename)
     if path is None:
         result = next(
             (
@@ -812,25 +863,15 @@ def open_doc(task_id, filename):
     return jsonify({"ok": True, "name": p.name})
 
 
-@app.route("/api/translate/cancel/<task_id>/<filename>", methods=["POST"])
-def translate_cancel(task_id, filename):
-    """Прерывает идущий перевод файла (если такой есть)."""
-    with _translate_cancels_lock:
-        ev = _translate_cancels.get(f"{task_id}\0{filename}")
+@app.route("/api/refine/cancel/<task_id>/<filename>", methods=["POST"])
+def refine_cancel(task_id, filename):
+    """Прерывает идущее улучшение/перевод файла (если такое есть)."""
+    with _refine_cancels_lock:
+        ev = _refine_cancels.get(f"{task_id}\0{filename}")
     if ev is not None:
         ev.set()
         return jsonify({"ok": True})
-    return jsonify({"ok": False, "error": "перевод не идёт"})
-
-@app.route("/api/enhance/cancel/<task_id>/<filename>", methods=["POST"])
-def enhance_cancel(task_id, filename):
-    """Прерывает идущее улучшение файла (если такое есть)."""
-    with _enhance_cancels_lock:
-        ev = _enhance_cancels.get(f"{task_id}\0{filename}")
-    if ev is not None:
-        ev.set()
-        return jsonify({"ok": True})
-    return jsonify({"ok": False, "error": "улучшение не идёт"})
+    return jsonify({"ok": False, "error": "обработка не идёт"})
 
 
 @app.route("/api/gpu")
@@ -1067,10 +1108,8 @@ _llm_install_running = False
 _llm_install_last_error = ""
 _llm_install_lock = threading.Lock()
 _llm_install_cancel = threading.Event()
-_translate_cancels: dict[str, threading.Event] = {}
-_translate_cancels_lock = threading.Lock()
-_enhance_cancels: dict[str, threading.Event] = {}
-_enhance_cancels_lock = threading.Lock()
+_refine_cancels: dict[str, threading.Event] = {}
+_refine_cancels_lock = threading.Lock()
 
 
 @app.route("/api/llm")

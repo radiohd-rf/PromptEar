@@ -1,6 +1,6 @@
 # PromptEar
 
-![Version](https://img.shields.io/badge/version-0.16.2-blue)
+![Version](https://img.shields.io/badge/version-0.16.3-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078d7)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Privacy](https://img.shields.io/badge/privacy-100%25_local-brightgreen)
@@ -38,7 +38,7 @@
 
 ## Быстрый старт
 
-1. Скачать `PromptEar-v0.16.2.zip` со страницы [релизов](https://github.com/radiohd-rf/PromptEar/releases)
+1. Скачать `PromptEar-v0.16.3.zip` со страницы [релизов](https://github.com/radiohd-rf/PromptEar/releases)
 2. Распаковать в любую папку
 3. Запустить `Запустить PromptEar.exe`
 4. Дождаться установки (bootstrap — 1 раз)
@@ -106,7 +106,7 @@
 python build_zips.py
 ```
 
-Требуется Python 3.10+ и интернет. На выходе — `PromptEar-v0.16.2.zip`
+Требуется Python 3.10+ и интернет. На выходе — `PromptEar-v0.16.3.zip`
 с wheel-файлами зависимостей, ffmpeg, llama.cpp и моделью Whisper base.
 
 ## Лицензия
