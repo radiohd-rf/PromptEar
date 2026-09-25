@@ -71,4 +71,16 @@ ffmpeg.exe
 wheels/
 Запустить PromptEar.exe
 AGENTS.md
+MEMORY.md
+icon25.jpeg
+
+# Agent working files / raw screenshots
+2026-*.jpg
+2026-*.png
+
+# Old unused icon
+di.ico
+
+# Test media (kept locally, not in repo)
+тестовые данные/
 
