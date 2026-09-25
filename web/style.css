@@ -3,6 +3,34 @@
    Значения перезаписываются из /api/theme (web/theme.py, HSL-палитра).
    Ниже — фолбэки на случай, если палитра ещё не приехала.
    ──────────────────────────────────────────────────────────────── */
+
+/* Интерфейс приложения — Inter (Google Fonts, OFL, с кириллицей). */
+@font-face {
+  font-family: 'Inter';
+  src: url('fonts/inter/Inter.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+/* Текст окна «Документ» — Lora (Google Fonts, OFL, с кириллицей). */
+@font-face {
+  font-family: 'Lora';
+  src: url('fonts/lora/Lora.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+/* Логотип «PromptEar» — Riviera (Polina Soldatova, Behance, CC-BY). */
+@font-face {
+  font-family: 'Riviera';
+  src: url('fonts/riviera/Riviera.otf') format('opentype');
+  font-style: normal;
+  font-weight: normal;
+  font-display: swap;
+}
+
 :root {
   /* цвет (фолбэк: seed #4fc3f7, тёмная) */
   --md-primary: #a9d9ef;
@@ -56,7 +84,7 @@
   --dur-2: 200ms;
   --dur-3: 300ms;
   /* типографика */
-  --font-display: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Inter', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
   --fs-title: 16px;
   --fs-body: 14px;
   --fs-label: 12px;
@@ -167,9 +195,10 @@ header {
   -webkit-app-region: drag;
 }
 header h1 {
-  font-size: 24px;
+  font-family: 'Riviera', var(--font-display);
+  font-size: 48px;
   font-weight: 600;
-  margin: 0;
+  margin: 14px 0 0 0;
   letter-spacing: .1px;
   padding-left: var(--sp-4);
   background: linear-gradient(90deg, var(--md-secondary), var(--md-primary) 50%, var(--md-tertiary));
@@ -317,34 +346,94 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
 #drop-zone button:hover { background: var(--md-primary); color: var(--md-on-primary); }
 
 #settings { display: flex; flex-direction: column; gap: var(--sp-2); flex: 0 0 auto; }
+#context-panel {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--r-md);
+  background: var(--md-surface-container);
+}
+#context-header h3 {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--md-on-surface-variant);
+  padding: var(--sp-3) var(--sp-4);
+  margin: 0;
+}
+#context-header {
+  position: relative;
+}
+#context-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+#context-header-row h3 { padding: var(--sp-3) var(--sp-4); }
+#presets-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin: var(--sp-2) var(--sp-3);
+  padding: 4px var(--sp-2);
+  font-size: var(--fs-label);
+  color: var(--md-on-surface-variant);
+  background: var(--md-surface-container-high);
+  border-radius: var(--r-pill);
+  white-space: nowrap;
+}
+#presets-btn svg { width: 14px; height: 14px; fill: currentColor; }
+#presets-btn:hover { background: var(--md-surface-variant); color: var(--md-on-surface); }
+#presets-menu {
+  position: absolute;
+  top: 100%;
+  left: var(--sp-3);
+  right: var(--sp-3);
+  z-index: 30;
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-1);
+  background: var(--md-surface-container-highest);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--r-md);
+  box-shadow: var(--elev-3);
+  max-height: 264px;
+  overflow-y: auto;
+}
+#presets-menu li { margin: 0; }
+#presets-menu li button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  color: var(--md-on-surface);
+  font-size: var(--fs-body);
+}
+#presets-menu li button:hover { background: var(--md-surface-variant); }
+#presets-menu .preset-title { font-weight: 600; }
 #context-prompt {
   width: 100%;
   max-width: 100%;
   flex: 0 0 auto;
   height: 78px;
   overflow-y: auto;
-  background: var(--md-surface-container);
+  background: transparent;
   color: var(--md-on-surface);
-  border: 1px solid var(--md-outline-variant);
-  border-radius: var(--r-sm);
-  padding: var(--sp-2);
+  border: none;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+  padding: var(--sp-2) var(--sp-4) var(--sp-3);
   font-size: var(--fs-body);
   resize: none;
-  transition: border-color var(--dur-2) var(--ease-std),
-              box-shadow var(--dur-2) var(--ease-std),
-              transform .25s var(--ease-std);
-  box-shadow: var(--elev-1);
+  transition: box-shadow var(--dur-2) var(--ease-std),
+              background-color var(--dur-2) var(--ease-std);
 }
-#context-prompt::placeholder { color: var(--md-on-surface-variant); }
-#context-prompt:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--elev-2);
-}
+#context-prompt::placeholder { color: var(--md-on-surface-variant); opacity: .55; font-weight: 400; }
+#context-prompt:hover { background: var(--md-surface-container-low); }
 #context-prompt:focus {
   outline: none;
-  border-color: var(--md-primary);
-  box-shadow: 0 0 0 2px var(--md-primary-container);
-  transform: none;
+  background: var(--md-surface-container-low);
+  box-shadow: inset 0 0 0 2px var(--md-primary-container);
 }
 
 #log {
@@ -659,6 +748,39 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
 }
 .live-actions button svg { width: 16px; height: 16px; fill: currentColor; }
 .live-actions button:hover { background: var(--md-surface-variant); color: var(--md-on-surface); }
+.live-actions button .font-step {
+  font-family: inherit;
+  font-weight: 600;
+  line-height: 1;
+}
+.live-actions button .font-step-lg { font-size: 17px; }
+.live-actions button .font-step-sm { font-size: 12px; margin-top: 3px; }
+
+/* Размер шрифта «Документа» — сегментированная пара A / a с перегородкой */
+.font-size-group {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  background: var(--md-surface-container-high);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+.font-size-group button {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0;
+  background: none;
+}
+.font-size-group button + button {
+  border-left: 1px solid var(--md-surface-variant);
+}
+.font-size-group button:hover {
+  background: var(--md-surface-variant);
+  color: var(--md-on-surface);
+}
 #refine-progress {
   display: flex;
   align-items: center;
@@ -717,6 +839,7 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   flex: 1;
   overflow-y: auto;
   padding: var(--sp-4);
+  font-family: 'Lora', Georgia, 'Times New Roman', serif;
   font-size: var(--fs-body);
   line-height: 1.6;
   white-space: pre-wrap;
@@ -732,7 +855,7 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   border-radius: var(--r-pill);
   background: var(--md-primary-container);
   color: var(--md-on-primary-container);
-  font-family: var(--ff-mono, ui-monospace, Consolas, monospace);
+  font-family: 'Lora', Georgia, 'Times New Roman', serif;
   font-size: 0.8em;
   font-weight: 600;
   line-height: 1.5;
@@ -1022,15 +1145,15 @@ footer span:empty { display: none; }
 }
 
 /* ── Карточки-панели: мягкая тень + приподнимание ──────── */
-#file-list-container, #live-container, #log, #context-prompt, #drop-zone {
+#file-list-container, #live-container, #log, #context-panel, #drop-zone {
   transition: box-shadow .25s var(--ease-std),
               transform .25s var(--ease-std),
               border-color .25s var(--ease-std);
 }
-#file-list-container, #live-container {
+#file-list-container, #live-container, #context-panel {
   box-shadow: var(--elev-1);
 }
-#file-list-container:hover, #live-container:hover {
+#file-list-container:hover, #live-container:hover, #context-panel:hover {
   transform: translateY(-2px);
   box-shadow: var(--elev-2);
 }

@@ -137,7 +137,7 @@ class TranscribeStep(PipelineStep):
                 text_so_far = build_paragraph_timestamps(segments_so_far, "")
             else:
                 text_so_far = " ".join(s.text for s in segments_so_far)
-            emit(DraftEvent(text=text_so_far, final=False))
+            emit(DraftEvent(text=text_so_far, final=False, filename=filename))
 
         text, segments, duration = self._transcriber.transcribe_with_segments(
             audio_path, cancel=cancel, on_segment=on_segment, **kwargs
@@ -148,7 +148,7 @@ class TranscribeStep(PipelineStep):
         final_text = (
             build_paragraph_timestamps(segments, text) if config.timestamps else text
         )
-        emit(DraftEvent(text=final_text, final=True))
+        emit(DraftEvent(text=final_text, final=True, filename=filename))
         emit(LogEvent(f"  Распознано ({len(text)} символов): {result.preview}"))
         return result
 

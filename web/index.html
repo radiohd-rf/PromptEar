@@ -58,7 +58,19 @@
         </div>
 
         <div id="settings">
-          <textarea id="context-prompt" placeholder="Контекст (тема, имена, термины)" rows="3"></textarea>
+          <div id="context-panel">
+            <div id="context-header">
+              <div id="context-header-row">
+                <h3>Контекст</h3>
+                <button id="presets-btn" onclick="toggleContextPresets()" title="Вставить шаблон контекста по теме" aria-label="Добавить пресет">
+                  <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg>
+                  <span>Добавить пресет</span>
+                </button>
+              </div>
+              <ul id="presets-menu" class="hidden"></ul>
+            </div>
+            <textarea id="context-prompt" placeholder="Тема, имена, термины" rows="3"></textarea>
+          </div>
         </div>
       </div>
 
@@ -69,6 +81,14 @@
             <div class="live-title-row">
               <h3>Документ</h3>
               <div class="live-actions">
+                <div id="font-size-group" class="font-size-group" style="display:none">
+                  <button id="font-inc-btn" onclick="changeDocFontSize(1)" title="Увеличить размер текста" aria-label="Увеличить размер текста">
+                    <span class="font-step font-step-lg">A</span>
+                  </button>
+                  <button id="font-dec-btn" onclick="changeDocFontSize(-1)" title="Уменьшить размер текста" aria-label="Уменьшить размер текста">
+                    <span class="font-step font-step-sm">A</span>
+                  </button>
+                </div>
                 <button id="copy-btn" style="display:none" onclick="copyResult()" title="Копировать текст" aria-label="Копировать текст">
                   <svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11z"/></svg>
                 </button>

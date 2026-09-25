@@ -153,7 +153,12 @@ def _event_to_dict(event) -> dict:
         case TranscribingEvent():
             return {"type": "transcribing", "message": event.message}
         case DraftEvent():
-            return {"type": "draft", "text": event.text, "final": event.final}
+            return {
+                "type": "draft",
+                "text": event.text,
+                "final": event.final,
+                "filename": event.filename,
+            }
         case EnhancingEvent():
             return {
                 "type": "enhancing",

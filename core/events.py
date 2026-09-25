@@ -46,6 +46,7 @@ class DraftEvent(PipelineEvent):
 
     text: str
     final: bool = False
+    filename: str = ""
 
 
 @dataclass

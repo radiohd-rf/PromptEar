@@ -904,8 +904,10 @@ function syncResultActions() {
   const hasDoc = !!(name && (fileTexts[name] || fileRefined[name]));
   const copy = document.getElementById('copy-btn');
   const openDoc = document.getElementById('open-doc-btn');
+  const fontSize = document.getElementById('font-size-group');
   if (copy) copy.style.display = hasDoc ? '' : 'none';
   if (openDoc) openDoc.style.display = hasDoc ? '' : 'none';
+  if (fontSize) fontSize.style.display = hasDoc ? '' : 'none';
 }
 
 async function openResultDoc() {
@@ -1130,6 +1132,7 @@ function handleEvent(msg) {
       break;
 
     case 'draft': {
+      if (msg.filename && !files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
       const dkey = msg.filename || liveFile;
       if (!dkey) break;
       // Текст всегда кладём под СВОЙ файл, иначе черновик активного файла
@@ -1452,6 +1455,93 @@ function resetResult() {
   setResultText('', false);
   const overlay = document.getElementById('refine-overlay');
   if (overlay) overlay.style.display = 'none';
+}
+
+/* ── Пресеты контекста: шаблоны по темам ───────────────── */
+const CONTEXT_PRESETS = [
+  { title: 'Интервью / подкаст', text: 'Тема: интервью (подкаст). Участники: ведущий и гость. Ведущий задаёт вопросы, гость подробно отвечает. Имена и термины: [ФИО гостя], [название проекта]. Диалог двух спикеров — реплики каждого в отдельный абзац.' },
+  { title: 'Планёрка команды', text: 'Тема: рабочие планы команды на неделю. Участники: руководитель, исполнители, [имена]. Обсуждаются задачи, сроки, блокеры. Согласованные решения и ответственные выделять отдельно.' },
+  { title: 'Лекция / вебинар', text: 'Тема: обучающая лекция (вебинар). Лектор объясняет материал последовательно и отвечает на вопросы слушателей. Термины: [профессиональные термины]. Сохранить учебную структуру: введение, основная часть, итоги.' },
+  { title: 'Телефонный разговор', text: 'Тема: личный или деловой телефонный разговор двух человек. Участники: [имя1] и [имя2]. Материал — диалог: реплики каждого в отдельный абзац, паузы не значимы.' },
+  { title: 'Переговоры с клиентом', text: 'Тема: переговоры (продажа, согласование условий). Участники: менеджер и клиент [имя]. Обсуждаются продукт [название], цена, сроки, условия. Зафиксировать обещания и достигнутые договорённости.' },
+  { title: 'Конференция / доклад', text: 'Тема: выступление на конференции. Спикер представляет [тему доклада]. Термины: [ключевые термины]. Вопросы и ответы в конце — отдельным блоком.' },
+  { title: 'Судебное / юридическое', text: 'Тема: судебное заседание или юридическая консультация. Участники: судья, стороны, юристы. Точность формулировок важнее всего. Юридические термины: [термины].' },
+  { title: 'Приём врача', text: 'Тема: медицинская консультация. Участники: врач и пациент. Содержание: жалобы, анамнез, диагноз, назначения. Медицинские термины: [термины]. Назначения и рекомендации выделить отдельно.' },
+  { title: 'Общее собрание', text: 'Тема: общее собрание / отчётный период. Участники: [список]. Отчёт о результатах [период], обсуждение вопросов. Итоги и принятые решения — в конце.' },
+  { title: 'Мозговой штурм', text: 'Тема: обсуждение идей (мозговой штурм). Участники: [имена]. Идеи фиксируются без стилистической правки, сохраняя формулировки участников.' },
+];
+
+function buildContextPresets() {
+  const menu = document.getElementById('presets-menu');
+  if (!menu || menu.children.length) return;
+  CONTEXT_PRESETS.forEach((p, i) => {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.onclick = () => applyContextPreset(i);
+    const title = document.createElement('span');
+    title.className = 'preset-title';
+    title.textContent = p.title;
+    btn.appendChild(title);
+    li.appendChild(btn);
+    menu.appendChild(li);
+  });
+}
+
+function toggleContextPresets() {
+  const menu = document.getElementById('presets-menu');
+  if (!menu) return;
+  buildContextPresets();
+  menu.classList.toggle('hidden');
+}
+
+function applyContextPreset(index) {
+  const preset = CONTEXT_PRESETS[index];
+  const ta = document.getElementById('context-prompt');
+  if (!preset || !ta) return;
+  const cur = ta.value.trim();
+  ta.value = cur ? cur + '\n\n' + preset.text : preset.text;
+  document.getElementById('presets-menu')?.classList.add('hidden');
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+
+document.addEventListener('click', (e) => {
+  const menu = document.getElementById('presets-menu');
+  if (!menu || menu.classList.contains('hidden')) return;
+  if (!e.target.closest('#presets-btn') && !e.target.closest('#presets-menu')) {
+    menu.classList.add('hidden');
+  }
+});
+
+/* ── Размер шрифта окна «Документ» ────────────────────── */
+const DOC_FONT_MIN = 11;
+const DOC_FONT_MAX = 24;
+const DOC_FONT_STEP = 1;
+const DOC_FONT_DEFAULT = 14;
+
+function loadDocFontSize() {
+  try {
+    const stored = parseInt(localStorage.getItem('promptear.docFontSize') || '', 10);
+    if (Number.isFinite(stored)) {
+      return Math.min(DOC_FONT_MAX, Math.max(DOC_FONT_MIN, stored));
+    }
+  } catch (_) {}
+  return DOC_FONT_DEFAULT;
+}
+
+function applyDocFontSize() {
+  const el = document.getElementById('result-text');
+  if (!el) return;
+  el.style.fontSize = loadDocFontSize() + 'px';
+}
+
+function changeDocFontSize(delta) {
+  const next = Math.min(DOC_FONT_MAX, Math.max(DOC_FONT_MIN, loadDocFontSize() + delta));
+  try {
+    localStorage.setItem('promptear.docFontSize', String(next));
+  } catch (_) {}
+  applyDocFontSize();
 }
 
 
@@ -1890,6 +1980,7 @@ function requestRestart() {
 }
   async function init() {
   initTheme();
+  applyDocFontSize();
   connectDownloads();
   await refreshGpu();
   await refreshModels();
