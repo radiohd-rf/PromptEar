@@ -110,6 +110,7 @@ class Launcher
 
     static void Main()
     {
+        EnsureDesktopShortcut();
         string dir = Path.GetDirectoryName(typeof(Launcher).Assembly.Location);
         string venvPython = Path.Combine(dir, "venv", "Scripts", "python.exe");
         string mainPy = Path.Combine(dir, "main.py");
@@ -181,6 +182,46 @@ class Launcher
                     errorText = "Неизвестная ошибка. См. crash.log";
                 MessageBox.Show(errorText, "PromptEar — ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+    }
+
+    static void EnsureDesktopShortcut()
+    {
+        try
+        {
+            string desktop = Environment.GetFolderPath(
+                Environment.SpecialFolder.Desktop);
+            if (string.IsNullOrEmpty(desktop))
+                return;
+            string lnk = Path.Combine(desktop, "PromptEar.lnk");
+            if (File.Exists(lnk))
+                return;
+            Type shell = Type.GetTypeFromProgID("WScript.Shell");
+            if (shell == null)
+                return;
+            object ws = Activator.CreateInstance(shell);
+            object shortcut = ws.GetType().InvokeMember("CreateShortcut",
+                System.Reflection.BindingFlags.InvokeMethod, null, ws,
+                new object[] { lnk });
+            string exe = typeof(Launcher).Assembly.Location;
+            shortcut.GetType().InvokeMember("TargetPath",
+                System.Reflection.BindingFlags.SetProperty, null, shortcut,
+                new object[] { exe });
+            shortcut.GetType().InvokeMember("WorkingDirectory",
+                System.Reflection.BindingFlags.SetProperty, null, shortcut,
+                new object[] { Path.GetDirectoryName(exe) });
+            shortcut.GetType().InvokeMember("Description",
+                System.Reflection.BindingFlags.SetProperty, null, shortcut,
+                new object[] { "PromptEar — локальная транскрибация аудио" });
+            shortcut.GetType().InvokeMember("IconLocation",
+                System.Reflection.BindingFlags.SetProperty, null, shortcut,
+                new object[] { exe + ",0" });
+            shortcut.GetType().InvokeMember("Save",
+                System.Reflection.BindingFlags.InvokeMethod, null, shortcut, null);
+        }
+        catch
+        {
+            // Ярлык опционален — неудача не должна мешать запуску.
         }
     }
 
