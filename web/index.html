@@ -100,17 +100,6 @@
                 </button>
               </div>
             </div>
-            <div class="live-tools" style="display:none">
-              <button id="refine-btn" style="display:none" onclick="onRefineClick()">
-                <svg id="refine-icon" viewBox="0 0 24 24"><path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7zM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/></svg>
-                <span id="refine-spinner" class="spinner" style="display:none"></span>
-                <span id="refine-label">Улучшить текст</span>
-              </button>
-              <span id="refine-status" style="display:none"></span>
-              <button id="refine-reset-btn" style="display:none" onclick="resetRefined()" title="Показать транскрибацию" aria-label="Показать транскрибацию">
-                <svg id="refine-reset-icon" viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
-              </button>
-            </div>
           </div>
           <div id="refine-progress" style="display:none">
             <div class="progress-track"><div id="refine-progress-bar"></div></div>
@@ -272,59 +261,6 @@
       <div class="modal-actions">
         <button id="launch-apply" class="btn-primary" onclick="applyAndRun()">Применить и запустить</button>
         <button onclick="closeLaunchModal()">Отмена</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Refine modal (улучшение текста с ИИ и/или перевод) -->
-  <div id="refine-overlay" class="modal-overlay" onclick="closeRefineModal()" style="display:none">
-    <div class="modal-box" onclick="event.stopPropagation()">
-      <div class="modal-header">
-        <h2>Улучшить текст</h2>
-        <button class="icon-btn modal-close" onclick="closeRefineModal()" aria-label="Закрыть">
-          <svg viewBox="0 0 24 24"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>
-        </button>
-      </div>
-      <div class="modal-body">
-        <label class="modal-checkbox">
-          <input type="checkbox" id="refine-improve" checked>
-          Улучшить с ИИ
-        </label>
-        <p class="modal-hint" id="refine-improve-hint">ИИ перепишет текст: уберёт слова-паразиты, исправит орфографию и пунктуацию, приведёт к чистому стилю.</p>
-        <label class="modal-checkbox">
-          <input type="checkbox" id="refine-translate">
-          Перевести
-        </label>
-        <div class="modal-field">
-          <label>Язык перевода</label>
-          <select id="refine-lang" title="Язык перевода">
-            <option value="en">English</option>
-            <option value="de">Deutsch</option>
-            <option value="fr">Français</option>
-            <option value="es">Español</option>
-            <option value="it">Italiano</option>
-            <option value="ru">Русский</option>
-            <option value="uk">Українська</option>
-            <option value="be">Беларуская</option>
-            <option value="kk">Қазақша</option>
-            <option value="uz">O'zbek</option>
-            <option value="ky">Кыргызча</option>
-            <option value="az">Azərbaycanca</option>
-            <option value="hy">Հայերեն</option>
-            <option value="ka">ქართული</option>
-            <option value="tg">Тоҷикӣ</option>
-            <option value="tk">Türkmençe</option>
-            <option value="pl">Polski</option>
-            <option value="tr">Türkçe</option>
-            <option value="zh">中文</option>
-            <option value="ja">日本語</option>
-          </select>
-          <p class="modal-hint" id="refine-translate-hint">Перевести улучшенный текст на выбранный язык (только при галочке «Перевести»).</p>
-        </div>
-      </div>
-      <div class="modal-actions">
-        <button id="refine-apply" class="btn-primary" onclick="refineDraft()">Улучшить</button>
-        <button onclick="closeRefineModal()">Отмена</button>
       </div>
     </div>
   </div>
