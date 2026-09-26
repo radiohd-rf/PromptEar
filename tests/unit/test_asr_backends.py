@@ -58,5 +58,12 @@ def test_is_installed_gigaam_backend(monkeypatch) -> None:
 
 
 def test_installed_backend_prefers_first_installed(monkeypatch) -> None:
+    monkeypatch.setattr(gm, "is_installed", lambda _variant: True)
     monkeypatch.setattr(wm, "is_installed", lambda _alias: True)
     assert ab.installed_backend() == "gigaam_e2e_rnnt"
+
+
+def test_installed_backend_skips_not_installed_first(monkeypatch) -> None:
+    monkeypatch.setattr(gm, "is_installed", lambda _variant: False)
+    monkeypatch.setattr(wm, "is_installed", lambda _alias: True)
+    assert ab.installed_backend() == "whisper_base"
