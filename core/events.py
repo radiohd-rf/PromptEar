@@ -73,6 +73,7 @@ class FileStatusEvent(PipelineEvent):
 
     filename: str
     status: str  # queued|processing|transcribing|enhancing|done|skipped
+    audio_ok: bool = False  # аудио готово для плеера (опубликовано в кэш)
 
 
 @dataclass

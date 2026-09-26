@@ -24,7 +24,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-REDIST_VERSION = "0.16.4"
+REDIST_VERSION = "0.17.0"
 
 SOURCE_FILES = [
     "main.py",

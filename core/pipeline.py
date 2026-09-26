@@ -4,11 +4,13 @@
 """
 
 import re
+import shutil
 import threading
 import time
 import traceback
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from pathlib import Path
 from threading import Event
 from typing import Any
 
@@ -41,6 +43,9 @@ from utils.files import (
     save_docx,
     save_text_output,
 )
+from utils.logger import get_logger
+
+logger = get_logger()
 
 
 class PipelineStep(ABC):
@@ -227,10 +232,27 @@ class EnhanceStep(PipelineStep):
 
 
 class SaveStep(PipelineStep):
-    """Сохранение результата в файл."""
+    """Сохранение результата в файл.
 
-    def __init__(self, result_store: dict | None = None) -> None:
+    Параллельно публикует исходное аудио (WAV из Whisper) в сессионный кэш
+    для плеера окна «Документ» (спека specs/audio-player.md). Копия нужна до
+    CleanupStep, который удаляет temp-файлы и единственный останавливает
+    дорожку звука после обработки.
+    """
+
+    def __init__(
+        self,
+        result_store: dict | None = None,
+        audio_cache_dir: Path | None = None,
+        audio_cache_map: dict | None = None,
+    ) -> None:
         self._result_store = result_store if result_store is not None else {}
+        self._audio_cache_dir = audio_cache_dir
+        # ВАЖНО: не «audio_cache_map or {}» — пустой dict falsy, и на питоне
+        # `{} or {}` вернёт НОВЫЙ словарь, разорвав ссылку на task["audio_cache"].
+        self._audio_cache_map = (
+            {} if audio_cache_map is None else audio_cache_map
+        )
 
     @property
     def name(self) -> str:
@@ -272,11 +294,46 @@ class SaveStep(PipelineStep):
             )
         result.output_path = out_path
         self._result_store[str(result.audio.path)] = result
+        self._publish_audio(result)
         status = "skipped" if result.audio.skipped else "done"
         filename = result.audio.display_name or result.audio.path.name
-        emit(FileStatusEvent(filename=filename, status=status))
+        emit(
+            FileStatusEvent(
+                filename=filename,
+                status=status,
+                audio_ok=filename in self._audio_cache_map,
+            )
+        )
         emit(LogEvent(f"{filepath.name} -> {out_path.name}"))
         return result
+
+    def _publish_audio(self, result: TranscriptionResult) -> None:
+        """Копирует WAV (тот же, что подавался в Whisper) в сессионный кэш.
+
+        Кэш публикуется per-file, до CleanupStep: плеер работает уже для
+        первого готового файла, даже если задача ещё не завершена.
+        """
+        if self._audio_cache_dir is None or self._audio_cache_map is None:
+            return
+        src = result.audio.temp_path or result.audio.preprocessed_path
+        if src is None or not src.exists():
+            return
+        display = result.audio.display_name or result.audio.path.name
+        try:
+            self._audio_cache_dir.mkdir(parents=True, exist_ok=True)
+            stem = re.sub(r'[<>:"/\\|?*]+', "_", Path(display).stem) or "audio"
+            dest = self._audio_cache_dir / f"{stem}.wav"
+            i = 1
+            while dest.exists() and dest.resolve() != src.resolve():
+                dest = self._audio_cache_dir / f"{stem}-{i}.wav"
+                i += 1
+            if dest.resolve() != src.resolve():
+                shutil.copy2(src, dest)
+            self._audio_cache_map[display] = dest
+        except OSError as exc:
+            # Кэш вторичен — пайплайн не роняем, плеер останется недоступен.
+            self._audio_cache_map.pop(display, None)
+            logger.error(f"Не удалось сохранить аудио в кэш: {exc}")
 
 
 class CleanupStep(PipelineStep):
@@ -302,7 +359,12 @@ class CleanupStep(PipelineStep):
 class AudioPipeline:
     """Оркестратор пайплайна: итерирует файлы, прогоняет через список шагов."""
 
-    def __init__(self, steps: list[PipelineStep] | None = None) -> None:
+    def __init__(
+        self,
+        steps: list[PipelineStep] | None = None,
+        audio_cache_dir: Path | None = None,
+        audio_cache_map: dict | None = None,
+    ) -> None:
         self.steps = steps or [
             DetectPreprocessStep(),
             TranscribeStep(None),  # будет заменён в run()
@@ -310,6 +372,12 @@ class AudioPipeline:
             SaveStep(),
             CleanupStep(),
         ]
+        # Кэш аудио для плеера: dir + мапа display_name -> путь к WAV
+        # (заполняет SaveStep, читает web/server.py для /api/audio).
+        self.audio_cache_dir = audio_cache_dir
+        self.audio_cache_map = (
+            {} if audio_cache_map is None else audio_cache_map
+        )
 
     def run(
         self,
@@ -320,6 +388,8 @@ class AudioPipeline:
         transcriber: Any = None,
         enhancer: Any = None,
         result_store: dict | None = None,
+        audio_cache_dir: Path | None = None,
+        audio_cache_map: dict | None = None,
         skip_requested: Callable[[str], bool] | None = None,
     ) -> None:
         """Запускает пайплайн для списка файлов.
@@ -369,7 +439,11 @@ class AudioPipeline:
                 elif isinstance(step, EnhanceStep):
                     steps[i] = EnhanceStep(enhancer)
                 elif isinstance(step, SaveStep):
-                    steps[i] = SaveStep(result_store)
+                    steps[i] = SaveStep(
+                        result_store,
+                        audio_cache_dir or self.audio_cache_dir,
+                        audio_cache_map or self.audio_cache_map,
+                    )
 
             start_time = time.time()
 
@@ -456,10 +530,15 @@ def run_pipeline(
     transcriber: Any,
     enhancer: Any,
     result_store: dict | None = None,
+    audio_cache_dir: Path | None = None,
+    audio_cache_map: dict | None = None,
     skip_requested: Callable[[str], bool] | None = None,
 ) -> None:
     """Legacy-враппер для обратной совместимости."""
-    pipeline = AudioPipeline()
+    pipeline = AudioPipeline(
+        audio_cache_dir=audio_cache_dir,
+        audio_cache_map=audio_cache_map,
+    )
     pipeline.run(
         files,
         config,
@@ -468,5 +547,7 @@ def run_pipeline(
         transcriber=transcriber,
         enhancer=enhancer,
         result_store=result_store,
+        audio_cache_dir=audio_cache_dir,
+        audio_cache_map=audio_cache_map,
         skip_requested=skip_requested,
     )

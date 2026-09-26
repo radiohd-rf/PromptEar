@@ -39,6 +39,19 @@ let refineCancelling = false; // пользователь нажал «Отме�
 let llmDownloadCb = null;   // колбэк после успешной установки модели ИИ
 let llmPollTimer = null;
 let llmCancelRequested = false; // пользователь нажал «Отмена» во время скачивания
+// ── Аудиоплеер окна «Документ» (спека specs/audio-player.md) ──
+let audioEl = null;           // единый <audio> (не в DOM)
+let tsIndex = [];             // [{seconds, el}] таймкоды текущего документа
+let fileAudio = {};           // имя -> аудио готово (SSE file_status: audio_ok)
+let apCurName = null;         // имя файла, чьё аудио сейчас в audioEl.src
+let apActiveEl = null;        // текущий активный .ts-badge
+let apPendingSeek = null;     // seek, отложенный до загрузки metadata
+let apSeeking = false;        // пользователь тянет ползунок
+let apScrub = false;          // прогресс идёт от слайдера (не timeupdate)
+let apLastUserScroll = 0;     // время последнего ручного скролла #result-text
+let apIndex = -1;             // индекс активного абзаца в tsIndex (троттл)
+let apFollow = true;          // автопрокрутка за активным абзацем
+let apVolBefore = 0.5;        // уровень громкости до мьюта (для restore)
 const statusLabels = {
   queued: 'В очереди',
   processing: 'Подготовка',
@@ -513,14 +526,27 @@ async function refreshModels() {
     gigaamDepsOk = !!data.gigaam_deps_ok;
     if (data.current) appSettings.asr_backend = data.current;
     syncRefineButton();
-    syncAiDeleteBtn();
+    syncAiModelButtons();
   } catch (_) {}
 }
 
-// Кнопка «Удалить модель» — только когда модель ИИ установлена.
-function syncAiDeleteBtn() {
-  const btn = document.getElementById('ai-delete-row-btn');
-  if (btn) btn.style.display = gemmaInstalled ? '' : 'none';
+// Кнопки «Установить»/«Удалить» модель — взаимоисключающие,
+// зависят от наличия установленной модели ИИ (gemma).
+function syncAiModelButtons() {
+  const install = document.getElementById('ai-install-row-btn');
+  const del = document.getElementById('ai-delete-row-btn');
+  if (install) install.style.display = gemmaInstalled ? 'none' : '';
+  if (del) del.style.display = gemmaInstalled ? '' : 'none';
+}
+
+// Скачать модель ИИ (gemma) через общий модал загрузки модели.
+// Успешную установку уже обрабатывает pollLlmInstall → refreshModels()
+// (кнопка «Удалить»/«Установить» переключится сама).
+function installAiModel() {
+  offerLlmDownload(() => {
+    refreshLlmStatus();
+    fillAiCheckboxes();
+  });
 }
 
 async function refreshSettings() {
@@ -685,6 +711,17 @@ function removeFile(idx) {
   delete fileOriginal[name];
   delete refinedView[name];
   delete fileChecked[name];
+  delete fileAudio[name];
+  // Удаляется файл, чьё аудио играет/загружено — глушим плеер и чистим кэш.
+  if (apCurName === name && audioEl) {
+    audioEl.pause();
+    audioEl.removeAttribute('src');
+    audioEl.load();
+    apCurName = null;
+  }
+  if (taskId) {
+    fetch(`/api/audio/remove/${taskId}/${encodeURIComponent(name)}`, { method: 'POST' }).catch(() => {});
+  }
   files.splice(idx, 1);
   const wasCurrent = currentFileName === name;
   if (currentFileName === name) currentFileName = null;
@@ -706,6 +743,7 @@ function removeFile(idx) {
       syncResultActions();
     }
   }
+  syncAudioPlayer();
 }
 
 function renderFileList() {
@@ -895,6 +933,7 @@ function selectFile(name) {
     setResultText(text, false);
   }
   syncRefineButton();
+  syncAudioPlayer();
 }
 
 // Кнопки «Копировать» и «Открыть в редакторе» — появляются, когда у
@@ -1066,6 +1105,7 @@ async function runPipeline() {
   addLog('=== PromptEar ===');
   showSpinner();
   resetResult();
+  fileAudio = {};
   showLivePanel();
 
   // сбросить статусы: выбранные — в очередь, остальные — «Пропущено»,
@@ -1199,11 +1239,15 @@ function handleEvent(msg) {
     case 'file_status':
       if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
       fileStatuses[msg.filename] = msg.status;
+      fileAudio[msg.filename] = !!msg.audio_ok;
       if (msg.status === 'transcribing') {
         autoFollow(msg.filename);
         document.getElementById('skip-btn').style.display = '';
       }
       renderFileList();
+      if (msg.audio_ok && (currentFileName === msg.filename || followFile(msg.filename))) {
+        syncAudioPlayer();
+      }
       break;
 
     case 'skipped':
@@ -1300,6 +1344,7 @@ function setLiveFile(name) {
     }
     renderFileList();
   }
+  syncAudioPlayer();
 }
 
 // Следовать ли окну за событием файла: да, если пользователь явно не
@@ -1417,6 +1462,7 @@ function renderResultText(text) {
   const el = document.getElementById('result-text');
   const esc = escapeHtml(text);
   el.innerHTML = esc.replace(TS_BADGE_RE, '<span class="ts-badge">$1</span>');
+  rebuildTsIndex();
   el.scrollTop = el.scrollHeight;
 }
 
@@ -1455,6 +1501,288 @@ function resetResult() {
   setResultText('', false);
   const overlay = document.getElementById('refine-overlay');
   if (overlay) overlay.style.display = 'none';
+  resetAudioPlayer();
+}
+
+/* ── Аудиоплеер «Документа»: плэй/пауза/стоп, таймлайн,
+      клик в текст → старт с абзаца, подсветка + автопрокрутка ── */
+
+function fmtTime(sec) {
+  sec = Math.max(0, Math.floor(Number(sec) || 0));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function ensureAudioEl() {
+  if (audioEl) return audioEl;
+  audioEl = new Audio();
+  audioEl.preload = 'auto';
+  audioEl.volume = 0.5;
+  audioEl.addEventListener('volumechange', syncAudioVolume);
+  audioEl.addEventListener('loadedmetadata', () => {
+    const dur = audioEl.duration;
+    const slider = document.getElementById('ap-slider');
+    if (slider && isFinite(dur)) {
+      slider.max = String(Math.floor(dur));
+      document.getElementById('ap-dur').textContent = fmtTime(dur);
+    }
+    if (apPendingSeek != null) {
+      const t = apPendingSeek;
+      apPendingSeek = null;
+      try { audioEl.currentTime = t; } catch (_) {}
+      audioEl.play();
+      setPlayBtn(true);
+    }
+  });
+  audioEl.addEventListener('timeupdate', syncAudioUi);
+  audioEl.addEventListener('seeked', () => {
+    apScrub = false;
+    syncAudioUi();
+  });
+  audioEl.addEventListener('play', () => setPlayBtn(true));
+  audioEl.addEventListener('pause', () => setPlayBtn(false));
+  audioEl.addEventListener('ended', () => {
+    setPlayBtn(false);
+    syncAudioUi();
+  });
+  audioEl.addEventListener('error', () => {
+    addLog('⚠ Ошибка воспроизведения аудио');
+    setPlayBtn(false);
+    hideAudioPlayer();
+  });
+  return audioEl;
+}
+
+function audioUrl(name) {
+  return `/api/audio/${taskId}/${encodeURIComponent(name)}`;
+}
+
+function setPlayBtn(playing) {
+  const btn = document.getElementById('ap-play');
+  if (!btn) return;
+  btn.classList.toggle('playing', !!playing);
+  btn.title = playing ? 'Пауза' : 'Плэй';
+  btn.setAttribute('aria-label', playing ? 'Пауза' : 'Плэй');
+}
+
+function syncAudioVolume() {
+  const slider = document.getElementById('ap-volume');
+  if (slider && audioEl) {
+    slider.value = String(Math.round((audioEl.muted ? 0 : audioEl.volume) * 100));
+  }
+  const btn = document.getElementById('ap-volume-btn');
+  if (btn && audioEl) {
+    btn.classList.toggle('muted', !!(audioEl.muted || audioEl.volume === 0));
+  }
+}
+
+function toggleAudioMute() {
+  if (!audioEl) return;
+  if (audioEl.muted || audioEl.volume === 0) {
+    audioEl.muted = false;
+    audioEl.volume = apVolBefore > 0 ? apVolBefore : 1;
+  } else {
+    apVolBefore = audioEl.volume;
+    audioEl.volume = 0;
+    audioEl.muted = true;
+  }
+  syncAudioVolume();
+}
+
+function setAudioVolume(val) {
+  if (!audioEl) return;
+  const v = Math.min(100, Math.max(0, Number(val) || 0)) / 100;
+  if (v === 0) {
+    audioEl.muted = true;
+    audioEl.volume = 0;
+  } else {
+    audioEl.volume = v;
+    if (audioEl.muted) audioEl.muted = false;
+  }
+  syncAudioVolume();
+}
+
+function resetAudioPlayer() {
+  if (audioEl) {
+    audioEl.pause();
+    audioEl.removeAttribute('src');
+    audioEl.load();
+    audioEl.currentTime = 0;
+  }
+  apCurName = null;
+  apPendingSeek = null;
+  apFollow = true;
+  apIndex = -1;
+  setActiveBadge(null);
+  hideAudioPlayer();
+}
+
+function showAudioPlayer() {
+  const el = document.getElementById('audio-player');
+  if (el) el.style.display = '';
+  if (audioEl) {
+    const slider = document.getElementById('ap-slider');
+    if (slider) {
+      slider.max = audioEl.duration && isFinite(audioEl.duration)
+        ? String(Math.floor(audioEl.duration)) : '0';
+      slider.value = String(Math.floor(audioEl.currentTime || 0));
+    }
+    document.getElementById('ap-cur').textContent = fmtTime(audioEl.currentTime || 0);
+    document.getElementById('ap-dur').textContent = fmtTime(audioEl.duration || 0);
+    setPlayBtn(!audioEl.paused);
+  }
+}
+
+function hideAudioPlayer() {
+  const el = document.getElementById('audio-player');
+  if (el) el.style.display = 'none';
+}
+
+function syncAudioPlayer() {
+  const name = currentFileName;
+  const hasAudio = !!(taskId && name && fileAudio[name] && files.some(f => f.name === name));
+  if (!hasAudio) {
+    // Переключились на файл без аудио или его нет — гасим что играло.
+    if (apCurName) resetAudioPlayer();
+    else hideAudioPlayer();
+    return;
+  }
+  showAudioPlayer();
+  if (apCurName !== name) {
+    if (audioEl) { audioEl.pause(); }
+    apCurName = name;
+    apPendingSeek = null;
+    apFollow = true;
+    apIndex = -1;
+    setActiveBadge(null);
+    const el = ensureAudioEl();
+    el.src = audioUrl(name);
+    el.load();
+  }
+}
+
+function audioToggle() {
+  const el = ensureAudioEl();
+  if (!apCurName || !el.src) return;
+  if (el.paused) { el.play(); setPlayBtn(true); }
+  else { el.pause(); setPlayBtn(false); }
+}
+
+function audioStop() {
+  if (!audioEl) return;
+  audioEl.pause();
+  try { audioEl.currentTime = 0; } catch (_) {}
+  setPlayBtn(false);
+  syncAudioUi();
+}
+
+function audioSeek(v) {
+  if (!audioEl) return;
+  apScrub = true;
+  try { audioEl.currentTime = Number(v); } catch (_) {}
+  document.getElementById('ap-cur').textContent = fmtTime(v);
+  syncActiveParagraph();
+}
+
+function audioSeekTo(seconds) {
+  const el = ensureAudioEl();
+  if (!currentFileName || !fileAudio[currentFileName]) return;
+  if (taskId && apCurName !== currentFileName) {
+    if (audioEl) audioEl.pause();
+    apCurName = currentFileName;
+    el.src = audioUrl(currentFileName);
+    el.load();
+  }
+  if (!apCurName) return;
+  apFollow = true;         // клик в текст — явный запрос следования
+  apLastUserScroll = 0;
+  if (el.readyState >= 1 && isFinite(el.duration)) {
+    try { el.currentTime = seconds; } catch (_) {}
+    el.play();
+    setPlayBtn(true);
+  } else {
+    apPendingSeek = seconds;
+    el.load();
+  }
+}
+
+function syncAudioUi() {
+  const slider = document.getElementById('ap-slider');
+  if (!slider || !audioEl || apScrub) return;
+  const t = audioEl.currentTime || 0;
+  slider.value = String(Math.floor(t));
+  document.getElementById('ap-cur').textContent = fmtTime(t);
+  syncActiveParagraph();
+}
+
+function syncActiveParagraph() {
+  if (!audioEl || !tsIndex.length) return;
+  const t = audioEl.currentTime || 0;
+  let idx = -1;
+  for (let i = 0; i < tsIndex.length; i++) {
+    if (tsIndex[i].seconds <= t + 0.05) idx = i;
+    else break;
+  }
+  if (idx < 0) idx = 0;
+  if (idx !== apIndex) {
+    apIndex = idx;
+    const el = tsIndex[idx].el;
+    setActiveBadge(el);
+    const rt = document.getElementById('result-text');
+    if (apFollow && rt && Date.now() - apLastUserScroll > 2000) {
+      try { el.scrollIntoView({block: 'nearest', behavior: 'smooth'}); } catch (_) {}
+    }
+  }
+}
+
+function setActiveBadge(el) {
+  if (apActiveEl && apActiveEl !== el) apActiveEl.classList.remove('active');
+  apActiveEl = el;
+  if (el) el.classList.add('active');
+}
+
+function badgeToSeconds(badge) {
+  const parts = badge.textContent.split(':').map(Number);
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return 0;
+}
+
+function rebuildTsIndex() {
+  tsIndex = [];
+  const rt = document.getElementById('result-text');
+  if (!rt) return;
+  const badges = rt.querySelectorAll('.ts-badge');
+  for (const el of badges) {
+    tsIndex.push({seconds: badgeToSeconds(el), el});
+  }
+}
+
+// Делегированный клик по документу: бейдж → его время, иначе → предыдущий.
+function onDocClick(e) {
+  if (!taskId || !currentFileName || !fileAudio[currentFileName]) return;
+  if (!e.target.closest || !e.target.closest('#result-text')) return;
+  const badge = e.target.closest('.ts-badge');
+  let seconds;
+  if (badge) {
+    seconds = badgeToSeconds(badge);
+  } else {
+    // Клик в текст: геометрия проще document order — эвристика «предыдущий
+    // бейдж, чья строка выше точки клика» по вертикали окна документа.
+    seconds = 0;
+    const y = e.clientY;
+    for (const item of tsIndex) {
+      const r = item.el.getBoundingClientRect();
+      if (r.top <= y) seconds = item.seconds;
+      else break;
+    }
+  }
+  audioSeekTo(seconds);
+}
+
+function onDocScroll() {
+  apLastUserScroll = Date.now();
 }
 
 /* ── Пресеты контекста: шаблоны по темам ───────────────── */
@@ -1847,7 +2175,23 @@ function pollLlmInstall() {
       const resp = await fetch('/api/llm');
       const st = await resp.json();
       if (st.installing) {
-        document.getElementById('llm-dl-label').textContent = 'Скачивание модели ИИ… (может занять несколько минут)';
+        const label = document.getElementById('llm-dl-label');
+        const bar = document.getElementById('llm-dl-bar');
+        const prog = st.install_progress;
+        if (prog) {
+          const total = prog.total_mb ? ` из ${prog.total_mb} МБ (${prog.pct}%)` : ' МБ';
+          label.textContent = `Скачивание модели ИИ… ${prog.done_mb}${total}`;
+          if (prog.total_mb) {
+            bar.classList.remove('indeterminate');
+            bar.style.width = `${Math.max(2, Math.min(100, prog.pct))}%`;
+          } else {
+            bar.classList.add('indeterminate');
+          }
+        } else {
+          label.textContent = 'Скачивание модели ИИ… (может занять несколько минут)';
+          bar.classList.add('indeterminate');
+          bar.style.width = '40%';
+        }
         pollLlmInstall();
         return;
       }
@@ -1901,12 +2245,14 @@ async function awaitSyncAskResult() {
       const b2 = (fileBadges[currentFileName] || '');
       if (/^Переведено/.test(b2) || fileRefined[currentFileName]) return;
       fileTexts[currentFileName] = first.text;
+      fileAudio[currentFileName] = !!first.audio_ok;
       fileBadges[currentFileName] = 'Черновик (Whisper)';
       if (first.text) {
         setResultText(first.text, false);
         syncRefineButton();
       }
       renderFileList();
+      syncAudioPlayer();
     }
   } catch (_) {
     // не критично — черновик уже показан через SSE
@@ -2095,6 +2441,11 @@ setInterval(refreshLlmStatus, 5000);
 
 document.body.addEventListener('dragover', e => e.preventDefault());
 document.body.addEventListener('drop', e => e.preventDefault());
+
+// Аудиоплеер: клик в текст документа → старт с абзаца; ручной скролл
+// временно приостанавливает автопрокрутку за активным абзацем.
+document.getElementById('result-text')?.addEventListener('click', onDocClick);
+document.getElementById('result-text')?.addEventListener('scroll', onDocScroll, {passive: true});
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {

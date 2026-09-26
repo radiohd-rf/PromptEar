@@ -117,6 +117,27 @@
             <span id="refine-progress-label"></span>
           </div>
           <div id="result-text"></div>
+          <div id="audio-player" class="live-footer" style="display:none">
+            <div id="ap-ctrls">
+              <button id="ap-play" onclick="audioToggle()" title="Плэй/Пауза" aria-label="Плэй/Пауза">
+                <svg id="ap-play-icon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                <svg id="ap-pause-icon" viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
+              </button>
+              <button id="ap-stop" onclick="audioStop()" title="Стоп" aria-label="Стоп">
+                <svg viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+              </button>
+            </div>
+            <span id="ap-cur">0:00</span>
+            <input id="ap-slider" type="range" min="0" max="0" value="0" step="1"
+                   oninput="audioSeek(this.value)" aria-label="Таймлайн" />
+            <span id="ap-dur">0:00</span>
+            <button id="ap-volume-btn" onclick="toggleAudioMute()" title="Звук" aria-label="Звук">
+              <svg id="ap-volume-icon" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4z"/></svg>
+              <svg id="ap-volume-muted" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm12.6-1.6 1.4 1.4 1.8-1.8 1.4 1.4-1.8 1.8 1.8 1.8-1.4 1.4-1.8-1.8-1.8 1.8-1.4-1.4 1.8-1.8-1.8-1.8z"/></svg>
+            </button>
+            <input id="ap-volume" type="range" min="0" max="100" value="50" step="1"
+                   oninput="setAudioVolume(this.value)" aria-label="Громкость" title="Громкость" />
+          </div>
         </div>
       </div>
     </div>
@@ -320,6 +341,7 @@
       <div class="modal-body">
         <div class="ai-check-row">
           <span>Модель ИИ (Gemma)</span>
+          <button type="button" id="ai-install-row-btn" class="mini-btn" onclick="installAiModel()" style="display:none">Установить модель</button>
           <button type="button" id="ai-delete-row-btn" class="mini-btn danger" onclick="deleteAiModel()" style="display:none">Удалить модель</button>
         </div>
         <p class="modal-hint">Устанавливается автоматически при включении «Обработать с ИИ» в окне запуска.</p>

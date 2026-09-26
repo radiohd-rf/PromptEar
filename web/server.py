@@ -16,7 +16,7 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
-from config import LLM_ENGINE, SETTINGS_OPEN_FLAG, TEMP_DIR
+from config import AUDIO_CACHE_DIR, LLM_ENGINE, SETTINGS_OPEN_FLAG, TEMP_DIR
 from core import asr_backends as ab
 from core import settings as settings_store
 from core import whisper_models as wm
@@ -178,6 +178,7 @@ def _event_to_dict(event) -> dict:
                 "type": "file_status",
                 "filename": event.filename,
                 "status": event.status,
+                "audio_ok": event.audio_ok,
             }
         case SkippedEvent():
             return {"type": "skipped", "filename": event.filename, "message": event.message}
@@ -290,6 +291,8 @@ def _process_files(task_id: str) -> None:
             enhancer=enhancer if config.llm_available else None,
             result_store=task["results"],
             skip_requested=skip_requested,
+            audio_cache_dir=AUDIO_CACHE_DIR / task_id,
+            audio_cache_map=task["audio_cache"],
         )
 
         # Разовый перевод результата (модал запуска): транскрибация →
@@ -422,6 +425,18 @@ def api_theme():
     return jsonify(build_theme(None if dark is None else dark == "1"))
 
 
+def _sweep_audio_cache(keep_task_id: str | None = None) -> None:
+    """Выметает сессионный кэш аудио кроме задачи keep_task_id.
+
+    Вызывается при новом запуске (чужие задачи) и на старте приложения
+    (задачи живут в памяти процесса — после перезапуска пути не актуальны).
+    """
+    with contextlib.suppress(OSError):
+        for entry in AUDIO_CACHE_DIR.iterdir():
+            if entry.is_dir() and entry.name != keep_task_id:
+                shutil.rmtree(entry, ignore_errors=True)
+
+
 @app.route("/api/files", methods=["POST"])
 def upload_files():
     """Принимает файлы, создаёт задачу, запускает обработку."""
@@ -481,6 +496,7 @@ def upload_files():
     settings_store.save({k: v for k, v in launch_patch.items() if v is not None})
 
     task_id = uuid.uuid4().hex[:12]
+    _sweep_audio_cache(keep_task_id=task_id)
     task_temp_dir = TEMP_DIR / task_id
     task_temp_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
@@ -537,6 +553,7 @@ def upload_files():
         "temp_wavs": {str(p) for p in temp_wavs},
         "status": "processing",
         "results": {},
+        "audio_cache": {},
     }
 
     t = threading.Thread(target=_process_files, args=(task_id,), daemon=True)
@@ -584,6 +601,75 @@ def download_file(task_id, filename):
     return send_file(str(filepath), as_attachment=True)
 
 
+def _audio_file(task_id: str, filename: str) -> Path | None:
+    """Путь к аудио из сессионного кэша плеера (или None)."""
+    task = tasks.get(task_id)
+    if not task:
+        return None
+    path = task.get("audio_cache", {}).get(filename)
+    if path is None or not path.exists():
+        return None
+    return path
+
+
+@app.route("/api/audio/<task_id>/<path:filename>")
+def audio_file(task_id, filename):
+    """Раздача WAV плееру с поддержкой HTTP Range.
+
+    HTML5 `<audio>` требует 206 + Content-Range для перемотки и докачки,
+    иначе вебвью тянет файл целиком и seek не работает.
+    """
+    path = _audio_file(task_id, filename)
+    if path is None:
+        return jsonify({"error": "audio not found"}), 404
+    size = path.stat().st_size
+    headers = {"Accept-Ranges": "bytes"}
+    range_hdr = request.headers.get("Range")
+    if range_hdr:
+        m = re.match(r"bytes=(\d*)-(\d*)", range_hdr.strip())
+        if m:
+            start_s, end_s = m.group(1), m.group(2)
+            try:
+                start = int(start_s) if start_s else 0
+                end = int(end_s) if end_s else size - 1
+            except ValueError:
+                start, end = 0, size - 1
+            if start >= size or start > end:
+                headers["Content-Range"] = f"bytes */{size}"
+                return Response(status=416, headers=headers)
+            end = min(end, size - 1)
+
+            def gen():
+                remaining = end - start + 1
+                with open(str(path), "rb") as fh:
+                    fh.seek(start)
+                    while remaining > 0:
+                        chunk = fh.read(min(65536, remaining))
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                        yield chunk
+
+            headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+            headers["Content-Length"] = str(end - start + 1)
+            return Response(gen(), status=206, headers=headers)
+    return send_file(str(path), mimetype="audio/wav", conditional=True)
+
+
+@app.route("/api/audio/remove/<task_id>/<path:filename>", methods=["POST"])
+def audio_remove(task_id, filename):
+    """Удаляет аудио текущего файла из сессионного кэша (строка удалена
+    из окна «Файлы»)."""
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({"error": "task not found"}), 404
+    entry = task.get("audio_cache", {}).pop(filename, None)
+    if entry is not None:
+        with contextlib.suppress(OSError):
+            entry.unlink(missing_ok=True)
+    return jsonify({"status": "removed"})
+
+
 @app.route("/api/cancel/<task_id>", methods=["POST"])
 def cancel_task(task_id):
     task = tasks.get(task_id)
@@ -613,6 +699,7 @@ def task_results(task_id):
         return jsonify({"error": "task not found"}), 404
     results = []
     with_ts = bool(task.get("timestamps"))
+    audio_map = task.get("audio_cache", {})
     for result in task.get("results", {}).values():
         text = result.text
         # Окно должно показывать тот же текст, что записан в файл:
@@ -620,10 +707,12 @@ def task_results(task_id):
         # иначе после завершения метки исчезали из документа.
         if with_ts and text.strip() and result.segments:
             text = ensure_timestamps(result.segments, text)
+        filename = result.audio.display_name or result.audio.path.name
         results.append(
             {
-                "filename": result.audio.display_name or result.audio.path.name,
+                "filename": filename,
                 "text": text,
+                "audio_ok": filename in audio_map,
             }
         )
     return jsonify({"results": results})
@@ -1111,8 +1200,22 @@ def restart_app():
 
 _llm_install_running = False
 _llm_install_last_error = ""
+_llm_install_last_progress: tuple[int, int | None] | None = None
 _llm_install_lock = threading.Lock()
 _llm_install_cancel = threading.Event()
+
+
+def _llm_install_progress() -> dict | None:
+    """Прогресс скачивания модели ИИ: {done_mb, total_mb, pct} или None."""
+    if _llm_install_last_progress is None:
+        return None
+    done, total = _llm_install_last_progress
+    done_mb = done / (1024 * 1024)
+    out: dict = {"done_mb": round(done_mb, 1)}
+    if total:
+        out["total_mb"] = round(total / (1024 * 1024), 1)
+        out["pct"] = round(min(100.0, done / max(total, 1) * 100), 1)
+    return out
 _refine_cancels: dict[str, threading.Event] = {}
 _refine_cancels_lock = threading.Lock()
 
@@ -1142,6 +1245,7 @@ def llm_check():
                 "error": error,
                 "installing": _llm_install_running,
                 "install_error": _llm_install_last_error,
+                "install_progress": _llm_install_progress(),
             }
         )
     except Exception as exc:
@@ -1155,6 +1259,7 @@ def llm_check():
                 "error": str(exc),
                 "installing": _llm_install_running,
                 "install_error": _llm_install_last_error,
+                "install_progress": _llm_install_progress(),
             }
         )
 
@@ -1162,7 +1267,7 @@ def llm_check():
 @app.route("/api/llm/download", methods=["POST"])
 def llm_download():
     """Скачивает GGUF-модель ИИ в фоне и поднимает llama-server."""
-    global _llm_install_running, _llm_install_last_error
+    global _llm_install_running, _llm_install_last_error, _llm_install_last_progress
     if _llm_install_running:
         return jsonify({"installing": True})
     with _llm_install_lock:
@@ -1170,14 +1275,21 @@ def llm_download():
             return jsonify({"installing": True})
         _llm_install_running = True
         _llm_install_last_error = ""
+        _llm_install_last_progress = None
         _llm_install_cancel.clear()
 
     def worker():
-        global _llm_install_running, _llm_install_last_error
+        global _llm_install_running, _llm_install_last_error, _llm_install_last_progress
         try:
             from core.installers import GemmaInstaller
 
-            GemmaInstaller.download_and_start(cancel=_llm_install_cancel)
+            def on_progress(done: int, total: int | None) -> None:
+                global _llm_install_last_progress
+                _llm_install_last_progress = (done, total)
+
+            GemmaInstaller.download_and_start(
+                on_progress=on_progress, cancel=_llm_install_cancel
+            )
         except Exception as exc:
             if not _llm_install_cancel.is_set():
                 _llm_install_last_error = str(exc)

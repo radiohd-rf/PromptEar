@@ -763,7 +763,6 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   height: 26px;
   background: var(--md-surface-container-high);
   border-radius: var(--r-pill);
-  overflow: hidden;
 }
 .font-size-group button {
   width: 26px;
@@ -777,6 +776,8 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
 .font-size-group button + button {
   border-left: 1px solid var(--md-surface-variant);
 }
+.font-size-group button:first-child { border-radius: var(--r-pill) 0 0 var(--r-pill); }
+.font-size-group button:last-child { border-radius: 0 var(--r-pill) var(--r-pill) 0; }
 .font-size-group button:hover {
   background: var(--md-surface-variant);
   color: var(--md-on-surface);
@@ -861,6 +862,85 @@ main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding
   line-height: 1.5;
   vertical-align: baseline;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+#result-text .ts-badge:hover {
+  filter: brightness(1.06);
+}
+
+#result-text .ts-badge.active {
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+}
+
+/* ── Подвал аудиоплеера (окно «Документ») ─────────────────── */
+.live-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--md-outline-variant);
+  background: var(--md-surface-container);
+  flex-shrink: 0;
+  min-width: 0;
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+#audio-player { align-items: center; }
+#audio-player button {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--md-on-surface-variant);
+  background: var(--md-surface-container-high);
+  border-radius: var(--r-pill);
+  flex-shrink: 0;
+}
+#audio-player button:hover {
+  background: var(--md-surface-variant);
+  color: var(--md-on-surface);
+}
+#audio-player button svg { width: 16px; height: 16px; fill: currentColor; }
+/* плей + стоп — единая склеенная группа-пилюля, как .font-size-group */
+#ap-ctrls {
+  display: inline-flex;
+  border-radius: var(--r-pill);
+  background: var(--md-surface-container-high);
+  flex-shrink: 0;
+}
+#ap-ctrls button { border-radius: 0; background: transparent; }
+#ap-ctrls button + button { border-left: 1px solid var(--md-surface-variant); }
+#ap-ctrls button:first-child { border-radius: var(--r-pill) 0 0 var(--r-pill); }
+#ap-ctrls button:last-child { border-radius: 0 var(--r-pill) var(--r-pill) 0; }
+#ap-ctrls button:hover { background: var(--md-surface-variant); }
+#ap-play svg#ap-pause-icon { display: none; }
+#ap-play.playing svg#ap-play-icon { display: none; }
+#ap-play.playing svg#ap-pause-icon { display: block; }
+#ap-cur, #ap-dur {
+  font-family: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+  font-size: var(--fs-label);
+  color: var(--md-on-surface-variant);
+  min-width: 38px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+#ap-slider {
+  flex: 1;
+  min-width: 40px;
+  accent-color: var(--md-primary);
+  cursor: pointer;
+}
+#ap-volume-btn svg#ap-volume-muted { display: none; }
+#ap-volume-btn.muted svg#ap-volume-icon { display: none; }
+#ap-volume-btn.muted svg#ap-volume-muted { display: block; }
+#ap-volume {
+  width: 74px;
+  accent-color: var(--md-primary);
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 /* ── Переход между проходами геммы: мигание → затухание → появление ── */
@@ -1200,10 +1280,10 @@ footer span:empty { display: none; }
 .icon-btn:active, .mini-btn:active, #logs-btn:active,
 #cancel-btn:active { transform: scale(.94); }
 
-/* ── Пиллы инструментов (улучшить/перевести) ───────────── */
 /* ── Пиллы инструментов (улучшить текст) ───────────────── */
 #refine-btn, #refine-reset-btn,
-.live-actions button, .modal-actions button {
+.live-actions button, .modal-actions button,
+#ap-volume-btn, #ap-ctrls button, .font-size-group button {
   transition: background-color var(--dur-2) var(--ease-std),
               color var(--dur-2) var(--ease-std),
               transform .15s var(--ease-std),
@@ -1211,9 +1291,13 @@ footer span:empty { display: none; }
               border-color var(--dur-2) var(--ease-std);
 }
 #refine-btn:hover:not(.busy), #refine-reset-btn:hover,
-.live-actions button:hover {
+.live-actions button:hover,
+#ap-volume-btn:hover, #ap-ctrls button:hover, .font-size-group button:hover {
   transform: translateY(-1px);
 }
+#ap-volume-btn:active, #ap-ctrls button:active, .font-size-group button:active,
+.icon-btn:active, .mini-btn:active, #logs-btn:active,
+#cancel-btn:active { transform: scale(.94); }
 #refine-btn:not(.busy) { box-shadow: var(--elev-0); }
 #refine-btn:not(.busy):hover {
   box-shadow: var(--elev-1);

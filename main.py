@@ -4,6 +4,7 @@
 import contextlib
 import ctypes
 import os
+import shutil
 import socketserver
 import sys
 import threading
@@ -113,6 +114,14 @@ def _find_free_port() -> int:
 
 def main() -> None:
     _ensure_single_instance()
+    # Сессионный кэш аудио плеера: задачи не переживают рестарт, кэш — тем более.
+    with contextlib.suppress(Exception):
+        from config import AUDIO_CACHE_DIR
+
+        for entry in AUDIO_CACHE_DIR.iterdir():
+            if entry.is_dir():
+                with contextlib.suppress(OSError):
+                    shutil.rmtree(entry, ignore_errors=True)
     port = _find_free_port()
     url = f"http://127.0.0.1:{port}"
 

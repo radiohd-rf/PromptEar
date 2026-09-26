@@ -15,6 +15,10 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 # Флаг "открыть настройки при следующем старте" (ставится перед перезапуском
 # программы и снимается первым же /api/startup после него).
 SETTINGS_OPEN_FLAG = DATA_DIR / "open_settings.flag"
+# Кэш аудио для плеера окна «Документ» (спека specs/audio-player.md).
+# Сессионный: живёт, пока строка файла в окне «Файлы» не удалена; выметается
+# при новом запуске и при старте приложения.
+AUDIO_CACHE_DIR: Final[Path] = DATA_DIR / "audio_cache"
 TEMP_DIR: Final[Path] = BASE_DIR / "temp"
 TEMP_DIR.mkdir(exist_ok=True)
 
