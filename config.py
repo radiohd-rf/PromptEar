@@ -94,9 +94,9 @@ LLM_MODEL_PATH = LLM_MODEL_DIR / LLM_MODEL_FILENAME
 # URL прямого скачивания GGUF (HF-хостинг).
 # Файл: gemma-4-E2B-it-UD-Q4_K_XL.gguf (3.0 ГБ), Apache-2.0.
 GGUF_URL = (
-    "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/"
-    "gemma-4-E2B-it-UD-Q4_K_XL.gguf"
+    "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-UD-Q4_K_XL.gguf"
 )
+
 
 # Сборки llama.cpp (bin-win-cpu-x64.zip идёт в комплекте сборки приложения;
 # bin-win-cuda-13.4-x64.zip докачивается автоматически при включении GPU;

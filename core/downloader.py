@@ -99,9 +99,7 @@ def list_hf_files(repo_id: str) -> list[str]:
     r.raise_for_status()
     data = r.json()
     files = [
-        sibling.get("rfilename")
-        for sibling in data.get("siblings", [])
-        if sibling.get("rfilename")
+        sibling.get("rfilename") for sibling in data.get("siblings", []) if sibling.get("rfilename")
     ]
     return [name for name in files if _HF_FILE_RE.match(name)]
 
@@ -466,6 +464,7 @@ class DownloadManager:
         if enhancer.cuda_build_present():
             self._progress(download_id, "CUDA-сборка уже установлена", 100, 0, 0)
         else:
+
             def on_progress(done: int, total: int | None) -> None:
                 pct = min(99, int(done * 100 / max(total or 1, 1)))
                 self._progress(

@@ -35,16 +35,23 @@ def extract_audio(
     video_path = video_path.resolve()
     cmd = [
         ffmpeg_path,
-        "-i", str(video_path),
+        "-i",
+        str(video_path),
         "-vn",
-        "-acodec", "pcm_s16le",
-        "-ar", str(PREPROCESS_SAMPLE_RATE),
-        "-ac", "1",
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        str(PREPROCESS_SAMPLE_RATE),
+        "-ac",
+        "1",
         "-y",
         str(wav_path),
     ]
     result = subprocess.run(
-        cmd, capture_output=True, text=True, encoding="utf-8",
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
     if result.returncode != 0:

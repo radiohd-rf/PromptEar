@@ -87,9 +87,7 @@ def _hidden_child_consoles() -> Iterator[None]:
     orig_popen = subprocess.Popen
 
     def _popen_no_window(*args: Any, **kwargs: Any) -> Any:
-        kwargs["creationflags"] = (kwargs.get("creationflags") or 0) | (
-            subprocess.CREATE_NO_WINDOW
-        )
+        kwargs["creationflags"] = (kwargs.get("creationflags") or 0) | (subprocess.CREATE_NO_WINDOW)
         return orig_popen(*args, **kwargs)
 
     with mock.patch.object(subprocess, "Popen", new=_popen_no_window):
@@ -213,11 +211,18 @@ def _chunks(duration: float, ffmpeg: str, src: Path, tmp_dir: Path) -> list[Path
         chunk = tmp_dir / f"ggam-{uuid.uuid4().hex[:8]}.wav"
         cmd = [
             ffmpeg,
-            "-ss", f"{start}",
-            "-t", f"{CHUNK_SECONDS}",
-            "-i", str(src),
-            "-ar", "16000", "-ac", "1",
-            "-c:a", "pcm_s16le",
+            "-ss",
+            f"{start}",
+            "-t",
+            f"{CHUNK_SECONDS}",
+            "-i",
+            str(src),
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-c:a",
+            "pcm_s16le",
             "-y",
             str(chunk),
         ]

@@ -312,9 +312,7 @@ class BaseEnhancer(ABC):
 
         По умолчанию недоступен.
         """
-        raise NotImplementedError(
-            f"Перевод не поддерживается движком {self.get_engine_name()}"
-        )
+        raise NotImplementedError(f"Перевод не поддерживается движком {self.get_engine_name()}")
 
 
 class LlamaCppEnhancer(BaseEnhancer):
@@ -1100,10 +1098,14 @@ class LlamaCppEnhancer(BaseEnhancer):
 
         cmd = [
             str(server_exe),
-            "-m", str(LLM_MODEL_PATH),
-            "-c", str(LLM_CONTEXT),
-            "--host", "127.0.0.1",
-            "--port", str(port),
+            "-m",
+            str(LLM_MODEL_PATH),
+            "-c",
+            str(LLM_CONTEXT),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
         ]
         if self._use_gpu_setting() and self.cuda_build_present():
             # GPU-режим (CUDA-сборка, -ngl 99): кадры считает видеокарта, а

@@ -125,7 +125,7 @@
 
 ```python
 LLM_ENGINE = "llama"
-LLAMA_VARIANT = "amd"            # "default" | "amd"
+LLAMA_VARIANT = "amd"  # "default" | "amd"
 LLM_GPU_LAYERS = int(os.environ.get("PROMPTEAR_LLM_GPU_LAYERS", "99"))  # этап 1
 ```
 

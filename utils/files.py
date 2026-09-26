@@ -14,9 +14,7 @@ TS_MARKER_RE = re.compile(r"\[\d{1,2}:\d{2}(?::\d{2})?\]")
 # Метка «посреди предложения»: перед ней строчная буква, цифра, запятая или
 # двоеточие без знака конца предложения (и не начало строки) — такую метку
 # модель уронила в середину фразы, нужно перестроить разметку.
-BAD_MARKER_RE = re.compile(
-    r"[а-яёa-z0-9,;:]\s*\[\d{1,2}:\d{2}(?::\d{2})?\]"
-)
+BAD_MARKER_RE = re.compile(r"[а-яёa-z0-9,;:]\s*\[\d{1,2}:\d{2}(?::\d{2})?\]")
 
 
 def is_video_file(path: Path) -> bool:
@@ -118,7 +116,7 @@ def _starts_sentence(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
-    return t[0].isupper() or t[0].isdigit() or t[0] in "—–-«\"»("
+    return t[0].isupper() or t[0].isdigit() or t[0] in '—–-«"»('
 
 
 def has_bad_ts_markers(text: str) -> bool:
@@ -360,9 +358,7 @@ def save_text_output(
         save_txt(path, text)
 
 
-def translated_subtitles(
-    segments: list[Segment], text: str, output_format: str
-) -> str:
+def translated_subtitles(segments: list[Segment], text: str, output_format: str) -> str:
     """Строит SRT/VTT из переведённого текста.
 
     Перевод не сохраняет точного соответствия сегментам, поэтому текст режется

@@ -160,10 +160,7 @@ class Transcriber:
 
             device = "cpu"
             compute_type = "int8"
-            if (
-                settings_store.load().get("use_gpu", False)
-                and self.gpu_probe() is None
-            ):
+            if settings_store.load().get("use_gpu", False) and self.gpu_probe() is None:
                 device = "cuda"
                 compute_type = "float16"
 

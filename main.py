@@ -41,9 +41,7 @@ def _ensure_single_instance() -> None:
     # Local\\ — видимость в своей сессии (сервисы из session 0 не в счёт).
     _mutex_handle = kernel32.CreateMutexW(None, True, "Local\\PromptEarSingleInstance")
     if _mutex_handle and ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
-        ctypes.windll.user32.MessageBoxW(
-            None, "PromptEar уже запущен.", "PromptEar", 0x40
-        )
+        ctypes.windll.user32.MessageBoxW(None, "PromptEar уже запущен.", "PromptEar", 0x40)
         sys.exit(0)
 
 

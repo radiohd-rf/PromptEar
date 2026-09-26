@@ -90,12 +90,14 @@
 
 ```python
 class RagEngine:
-    def __init__(self, root: Path): ...          # root = models/rag
-    def rebuild_index(self) -> None: ...          # при старте / изменении файлов
-    def retrieve(self, query: str, top_k: int = 5) -> list[dict]: ...
-      # [{"text": str, "score": float, "exact": bool}]
+    def __init__(self, root: Path): ...  # root = models/rag
+    def rebuild_index(self) -> None: ...  # при старте / изменении файлов
+    def retrieve(self, query: str, top_k: int = 5) -> list[dict]:
+        ...
+        # [{"text": str, "score": float, "exact": bool}]
+
     @property
-    def enabled(self) -> bool: ...                # False, если корпус пуст
+    def enabled(self) -> bool: ...  # False, если корпус пуст
 ```
 
 - `LlamaCppEnhancer` получает опциональный `rag: RagEngine | None` (фабрика

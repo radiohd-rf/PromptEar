@@ -248,12 +248,7 @@ def _process_files(task_id: str) -> None:
         enhancer = create_enhancer()
         llm_ok, model_ok = enhancer.is_available()
         need_llm = config.enhance_mode == "auto" or bool(task.get("translate_lang"))
-        if (
-            not llm_ok
-            and model_ok
-            and need_llm
-            and hasattr(enhancer, "start_server")
-        ):
+        if not llm_ok and model_ok and need_llm and hasattr(enhancer, "start_server"):
             # Движок могли погасить после простоя — поднимаем лениво,
             # иначе auto-режим/перевод молча пропустит улучшение/перевод.
             emit(LogEvent("LLM-движок не запущен — запускаем..."))
@@ -303,9 +298,7 @@ def _process_files(task_id: str) -> None:
             if not config.llm_available:
                 emit(LogEvent("⚠ Перевод отменён: LLM-движок недоступен"))
             else:
-                _translate_pipeline_results(
-                    task_id, task, enhancer, emit, cancel, tr_lang
-                )
+                _translate_pipeline_results(task_id, task, enhancer, emit, cancel, tr_lang)
             task["translate_lang"] = ""  # на молчаливый повтор не влияет
 
         emit(DoneEvent("Готово"))
@@ -377,9 +370,7 @@ def _translate_pipeline_results(
             translated = ensure_timestamps(result.segments, translated)
 
         out_path = result.output_path or (
-            (result.audio.original_path or result.audio.path).with_suffix(
-                f".{output_format}"
-            )
+            (result.audio.original_path or result.audio.path).with_suffix(f".{output_format}")
         )
         if output_format.lower() in ("srt", "vtt") and result.segments is not None:
             out_path.write_text(
@@ -804,11 +795,7 @@ def post_settings():
 
     # Включили «Использовать GPU» → убеждаемся, что под ИИ стоит CUDA-сборка
     # llama.cpp (CPU-сборка из комплекта GPU не понимает). Качаем один раз в фоне.
-    if (
-        bool(patch.get("use_gpu"))
-        and not was_gpu
-        and not _has_cuda_llama_build()
-    ):
+    if bool(patch.get("use_gpu")) and not was_gpu and not _has_cuda_llama_build():
         threading.Thread(target=_auto_cuda_build, daemon=True).start()
 
     # Любое переключение «Использовать GPU» останавливает llama-server:
@@ -993,9 +980,7 @@ def restart_app():
         try:
             release()
         except Exception:
-            get_logger().warning(
-                "Не удалось освободить single-instance мутекс", exc_info=True
-            )
+            get_logger().warning("Не удалось освободить single-instance мутекс", exc_info=True)
     try:
         subprocess.Popen(
             [sys.executable, str(Path(__file__).resolve().parent.parent / "main.py")],
@@ -1095,9 +1080,7 @@ def llm_download():
                 global _llm_install_last_progress
                 _llm_install_last_progress = (done, total)
 
-            GemmaInstaller.download_and_start(
-                on_progress=on_progress, cancel=_llm_install_cancel
-            )
+            GemmaInstaller.download_and_start(on_progress=on_progress, cancel=_llm_install_cancel)
         except Exception as exc:
             if not _llm_install_cancel.is_set():
                 _llm_install_last_error = str(exc)
@@ -1157,10 +1140,7 @@ def _port_has_llama(port: int) -> bool:
     import requests
 
     try:
-        return (
-            requests.get(f"http://127.0.0.1:{port}/health", timeout=0.4).status_code
-            == 200
-        )
+        return requests.get(f"http://127.0.0.1:{port}/health", timeout=0.4).status_code == 200
     except requests.RequestException:
         return False
 

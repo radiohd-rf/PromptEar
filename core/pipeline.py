@@ -150,9 +150,7 @@ class TranscribeStep(PipelineStep):
         result.text = text
         result.segments = segments
         result.duration_sec = duration
-        final_text = (
-            build_paragraph_timestamps(segments, text) if config.timestamps else text
-        )
+        final_text = build_paragraph_timestamps(segments, text) if config.timestamps else text
         emit(DraftEvent(text=final_text, final=True, filename=filename))
         emit(LogEvent(f"  Распознано ({len(text)} символов): {result.preview}"))
         return result
@@ -250,9 +248,7 @@ class SaveStep(PipelineStep):
         self._audio_cache_dir = audio_cache_dir
         # ВАЖНО: не «audio_cache_map or {}» — пустой dict falsy, и на питоне
         # `{} or {}` вернёт НОВЫЙ словарь, разорвав ссылку на task["audio_cache"].
-        self._audio_cache_map = (
-            {} if audio_cache_map is None else audio_cache_map
-        )
+        self._audio_cache_map = {} if audio_cache_map is None else audio_cache_map
 
     @property
     def name(self) -> str:
@@ -375,9 +371,7 @@ class AudioPipeline:
         # Кэш аудио для плеера: dir + мапа display_name -> путь к WAV
         # (заполняет SaveStep, читает web/server.py для /api/audio).
         self.audio_cache_dir = audio_cache_dir
-        self.audio_cache_map = (
-            {} if audio_cache_map is None else audio_cache_map
-        )
+        self.audio_cache_map = {} if audio_cache_map is None else audio_cache_map
 
     def run(
         self,

@@ -120,9 +120,11 @@ def seed_color() -> tuple[int, str]:
     """Всегда фиксированный акцент PromptEar (системный акцент Windows игнорируем)."""
     return DEFAULT_SEED, "default"
 
+
 def _dwm_accent_old() -> int | None:
     """только для справки — больше не используется."""
     return _dwm_accent()
+
 
 # ── Упрощённая tonal palette (fallback-HCT) ───────────────────────
 
