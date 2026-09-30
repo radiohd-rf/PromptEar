@@ -48,8 +48,8 @@ let apVolBefore = 0.5;        // уровень громкости до мьют
 const statusLabels = {
   queued: 'В очереди',
   processing: 'Подготовка',
-  transcribing: 'В обработке',
-  enhancing: 'Обработка',
+  transcribing: 'Обработка',
+  enhancing: 'Улучшение',
   translating: 'Перевод',
   done: 'Готово',
   skipped: 'Пропущено',
@@ -993,6 +993,8 @@ async function runPipeline() {
   // уже идёт (загрузка/сканирование/этапы до транскрибации).
   enhancePass = 0;
   enhanceTotal = 0;
+  enhanceChunkCur = 0;
+  enhanceChunkTot = 0;
   translateLangName = (p.translate && p.translate_name) || '';
   showDocBusy(DOC_BUSY_LABELS.processing, DOC_BUSY_HINTS.processing);
 
@@ -1083,6 +1085,8 @@ function handleEvent(msg) {
     case 'enhancing':
       enhancePass = msg.active_pass;
       enhanceTotal = msg.total_passes || 0;
+      enhanceChunkCur = msg.chunk_current || 0;
+      enhanceChunkTot = msg.chunk_total || 0;
       syncDocBusy();
       if (msg.active_pass === 1) {
         // Проход 1 начался: черновик whisper уже показан мгновенно —
@@ -1099,7 +1103,7 @@ function handleEvent(msg) {
     case 'enhancing_stream':
       if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
       fileTexts[msg.filename] = msg.text;
-      fileBadges[msg.filename] = 'Обработка';
+      fileBadges[msg.filename] = 'Улучшение';
       if (!followFile(msg.filename)) { renderFileList(); break; }
       setLiveFile(msg.filename);
       // не печатаем по токенам: копим полный текст прохода,
@@ -1281,33 +1285,36 @@ const DOC_BUSY_HINTS = {
   enhancing: 'ИИ перечитывает и шлифует текст',
 };
 
+// Что делает ИИ на каждом проходе улучшения (совпадает с PASS_LABELS на сервере).
+const ENHANCE_PASS_HINTS = {
+  1: 'Проход 1: исправляем орфографию, пунктуацию и повторы',
+  2: 'Проход 2: выравниваем стиль, грамматику и согласование',
+  3: 'Проход 3: разбиваем на абзацы, оформляем диалоги, убираем воду',
+  4: 'Проход 4: проверяем и восстанавливаем года',
+};
+function enhancePassHint() {
+  const i = enhancePass;
+  const base = ENHANCE_PASS_HINTS[i]
+    || (enhanceTotal > 0 ? `Проход ${enhancePass} из ${enhanceTotal}` : '');
+  if (enhanceChunkTot > 1) {
+    return `Чанк ${enhanceChunkCur} из ${enhanceChunkTot} · ${base}`;
+  }
+  return base;
+}
+
 let enhancePass = 0;
 let enhanceTotal = 0;
+let enhanceChunkCur = 0;
+let enhanceChunkTot = 0;
 let translateLangName = '';
-
-// Перезапускает CSS-анимации лоадера, чтобы при повторном показе они
-// начинались с нуля, а не с сохранённого места движения.
-function refireDocBusyLoader() {
-  const loader = document.getElementById('doc-busy-loader');
-  if (!loader) return;
-  const cls = loader.classList;
-  cls.add('ai-loader--refire');
-  // принудительный reflow, чтобы класс снялся на следующем кадре
-  void loader.offsetWidth;
-  cls.remove('ai-loader--refire');
-}
 
 function showDocBusy(label, hint) {
   const overlay = document.getElementById('doc-busy-overlay');
   const statusEl = document.getElementById('doc-busy-status');
   if (!overlay || !statusEl) return;
-  // Перезапуск анимаций только при переходе из скрытого состояния,
-  // иначе между проходами улучшения вращение «прыгает» в начало.
-  const wasHidden = overlay.classList.contains('hidden');
   statusEl.textContent = label || 'Обработка';
   const hintEl = document.getElementById('doc-busy-hint');
   if (hintEl) hintEl.textContent = hint || '';
-  if (wasHidden) refireDocBusyLoader();
   overlay.classList.remove('hidden');
 }
 
@@ -1318,28 +1325,37 @@ function hideDocBusy() {
 
 // Обновляет оверлей по статусу текущего файла. Во время перевода
 // (task['translate_lang']) накладываем «Перевод», независимо от статуса.
+// В конце всегда синхронизируем плеер: его видимость зависит от того,
+// спрятано ли матовое стекло (при входе/выходе перевода статус меняется).
 function syncDocBusy() {
   if (translating) {
     showDocBusy('Перевод', translateLangName
       ? `Переводим готовый текст на ${translateLangName}`
       : 'Переводим готовый текст');
+    syncAudioPlayer();
     return;
   }
   const name = currentFileName || liveFile;
   const st = name ? fileStatuses[name] : null;
   const label = st ? DOC_BUSY_LABELS[st] : null;
-  if (!label) { hideDocBusy(); return; }
+  if (!label) {
+    hideDocBusy();
+    syncAudioPlayer();
+    return;
+  }
   let hint = DOC_BUSY_HINTS[st] || '';
-  if (st === 'enhancing' && enhanceTotal > 0) {
-    hint = `ИИ шлифует текст — проход ${enhancePass} из ${enhanceTotal}`;
+  if (st === 'enhancing' && enhancePass > 0) {
+    hint = enhancePassHint();
   }
   showDocBusy(label, hint);
+  syncAudioPlayer();
 }
 
 function finish() {
   translating = false;
   hideDocBusy();
   renderFileList();
+  syncAudioPlayer();
   if (eventSource) { eventSource.close(); eventSource = null; }
   setBusy(false);
   document.getElementById('skip-btn').style.display = 'none';

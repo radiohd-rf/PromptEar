@@ -39,6 +39,7 @@ from config import (
     MULTI_PASS_MAX_RATIO,
     MULTI_PASS_MIN_RATIO,
 )
+from processing.date_db import find_year_candidates
 from processing.topic import detect_topic
 from utils.logger import get_logger
 
@@ -48,17 +49,66 @@ PASS_LABELS = {
     "pass3": "Структура (абзацы, диалоги, без воды)",
 }
 
+# Распознавание речи (GigaAM/Whisper) систематически теряет ПЕРВЫЕ цифры годов:
+# «1185 год» → «185 год», «1202 году» → «122 году». Промпты запрещают трогать
+# числа — поэтому для модели запрет выглядит абсолютным, и года остаются битыми.
+# Это правило явно снимает запрет для годов и требует вычитки ВСЕХ дат.
+YEAR_FIX_RULE = (
+    "Годы: движок распознавания речи иногда теряет первые цифры годов "
+    "(«185 год» вместо «1185 год», «122 году» вместо «1202 году»).\n"
+    "- ВАЖНО: года из 1–3 цифр (862 год, 637 год, 185 год) МОГУТ быть "
+    "корректными — это эпоха I–IX веков. НЕ исправляй их без веских доказательств.\n"
+    "- Исправляй годовую дату ТОЛЬКО если в самом тексте есть четырёхзначные года "
+    "той же эпохи и короткий год явно из того же периода по контексту "
+    "(Слово о полку Игореве — 1185 год, Куликовская битва — 1380 год и т.п.).\n"
+    "- Для годов правило «не трогать числа» не действует; сомневаешься — оставь как есть.\n"
+    "- Прочие числа (счёт, меры, цены, номера) трогать запрещено."
+)
+
+# ── 4-й проход по датам ───────────────────────────────────────────────────
+# Распознавание речи теряет ПЕРВУЮ цифру года («1185 год» → «185 год»).
+# Короткие года (1–3 цифры) — кандидаты на проверку, но МОГУТ быть
+# корректными датами I–IX вв. (862 год, 637 год). Поэтому проход запускаем
+# только если в тексте есть И короткий год И хотя бы один четырёхзначный
+# (признак эпохи с 4-значной датировкой).
+_YEAR_CARD_RE = re.compile(r"(?<!\d)(\d{1,3})[ \u00a0]+год(?:а|у|ом|е|ы)?\b", re.IGNORECASE)
+_YEAR_FULL_RE = re.compile(r"(?<!\d)\d{4}(?!\d)")
+
+# Промпт 4-го прохода: модель получает карточки КАЖДОГО короткого года
+# с контекстом вокруг и возвращает ТОЛЬКО исправления вида «185 -> 1185»,
+# которые применяются в коде точечной заменой. Текст не переписывается —
+# остальной контент модель не трогает.
+DATE_PASS_PROMPT = (
+    "Ты — редактор, проверяющий ГОДЫ в распознанном тексте.\n"
+    "Проблема: система распознавания речи иногда теряет ПЕРВУЮ цифру года: "
+    "«1185 год» звучит как «185 год», «1202 году» — как «122 году».\n"
+    "Ниже — все найденные в тексте года из 1–3 цифр, каждый со своим контекстом.\n\n"
+    "ВАЖНО: года из 1–3 цифр МОГУТ быть корректными — это эпоха I–IX веков "
+    "(862 год, 637 год, 185 год). Исправляй ТОЛЬКО те, где по контексту "
+    "однозначно доказуем полный год.\n"
+    "Исправляй, если рядом в тексте есть четырёхзначные года той же эпохи, "
+    "упомянут век XI или позже, или год относится к известному событию.\n"
+    "Сомневаешься — не исправляй, НЕ выдумывай годы.\n\n"
+    "Верни ТОЛЬКО строки исправлений, по одной на год, в формате:\n"
+    "185 -> 1185\n"
+    "122 -> 1202\n"
+    "Для корректных годов НИЧЕГО не пиши. Если исправлять нечего — "
+    "верни ровно одно слово: НЕТ"
+)
+
 # Правило для промптов всех проходов, когда вход размечен таймкодами [MM:SS].
 # Метка выполняет роль якоря: её нельзя удалять/менять, при перестановке
 # фрагмента она переносится вместе с ним (Gemma уже видит примерные таймкоды
 # Whisper в каждом куске входного текста).
 TS_KEEP_RULE = (
     "- В тексте есть метки времени [MM:SS] в начале фрагментов\n"
-    "- Каждая метка привязана к своему фрагменту и обязана сохраниться\n"
+    "- Каждая метка привязана к своему фрагменту (куску речи) и обязана сохраниться\n"
     "- НЕ удаляй метки, НЕ меняй числа в них и НЕ добавляй новых\n"
     "- Если переносишь фрагмент текста — переноси его вместе с меткой\n"
     "- Метки всегда идут в порядке возрастания времени\n"
-    "- Метка стоит ТОЛЬКО в начале своего фрагмента, НЕ ставь её посреди предложения\n"
+    "- Метка стоит В ТОМ ЖЕ МЕСТЕ текста, где она стоит во входе: сразу перед\n"
+    "  своим фрагментом, даже если этот фрагмент начинается в середине абзаца.\n"
+    "- НЕ переноси метку в начало абзаца или предложения ради красоты\n"
     "- Если после метки идёт строчная буква — это не начало предложения, оставь регистр как есть\n"
 )
 
@@ -513,11 +563,15 @@ class LlamaCppEnhancer(BaseEnhancer):
         stream_callback=None,
         timestamps: bool = False,
     ) -> str:
-        """3-проходное улучшение: очистка → стиль → структура.
+        """Многопроходное улучшение: очистка → стиль → структура → даты.
 
         Длинные тексты дробятся на чанки, каждый обрабатывается независимо.
         stream_callback(text_so_far, pass_no, chunk_no, chunk_total) вызывается
         по мере генерации каждого прохода («модель печатает»).
+
+        4-й проход (даты) включается только если в тексте есть года: собирает
+        короткие года из всего текста с контекстом и применяет исправления
+        точечно (см. _pass_dates). Не портит корректные даты I–IX вв.
 
         timestamps=True — во входе есть метки [MM:SS] (от Whisper): промпты
         получают правило не удалять и не переставлять их, метка «прилипает»
@@ -535,6 +589,8 @@ class LlamaCppEnhancer(BaseEnhancer):
             ("pass2", self._pass_style),
             ("pass3", self._pass_structure),
         ]
+        need_dates = self._short_and_full_years(text)
+        total_passes = len(passes) + (1 if need_dates else 0)
 
         processed = []
         for idx, chunk in enumerate(chunks):
@@ -545,7 +601,7 @@ class LlamaCppEnhancer(BaseEnhancer):
             for name, pass_fn in passes:
                 if cancel is not None and cancel.is_set():
                     break
-                label = f"Проход {name[4:]}/3: {PASS_LABELS.get(name, name)}"
+                label = f"Проход {name[4:]}/{total_passes}: {PASS_LABELS.get(name, name)}"
                 if len(chunks) > 1:
                     label = f"Чанк {idx + 1}/{len(chunks)}: {label}"
                 if progress_callback:
@@ -588,7 +644,158 @@ class LlamaCppEnhancer(BaseEnhancer):
                 break
             processed.append(self._restore_speakers(chunk))
 
-        return "\n\n".join(processed)
+        result_text = "\n\n".join(processed)
+
+        # 4-й проход по датам: если в тексте есть короткие года рядом с
+        # четырёхзначными (распознавание теряет первую цифру года), пробуем
+        # восстановить их отдельным фокусированным проходом. Собираем ВСЕ года
+        # из текста вместе с контекстом — модель видит их как единую группу,
+        # возвращает только список исправлений, а применения — кодом ниже.
+        # Это надёжнее встроенных правил проходов 1–3, где «проверь года»
+        # тонет среди десятков инструкций и чанки не видят друг друга.
+        if need_dates and cancel is not None and not cancel.is_set():
+            if progress_callback:
+                progress_callback(f"Проход 4/{total_passes}: Проверка дат")
+            result_text = self._pass_dates(result_text, cancel=cancel)
+
+        return result_text
+
+    def _short_and_full_years(self, text: str) -> bool:
+        """Есть ли признаки битых годов — и короткие года, и четырёхзначные.
+
+        Короткие года (1–3 цифры) сами по себе корректны для I–IX вв.
+        (862 год, 637 год). Но если в тексте есть и четырёхзначный год —
+        эпоха с 4-значной датировкой, и короткие года рядом могут быть
+        обрезанными («1185» → «185»). Запускаем 4-й проход только тогда.
+        """
+        return bool(_YEAR_CARD_RE.search(text)) and bool(_YEAR_FULL_RE.search(text))
+
+    def _pass_dates(
+        self,
+        text: str,
+        cancel: Event | None = None,
+    ) -> str:
+        """4-й проход: точечное восстановление годов.
+
+        Два уровня:
+        1) База знаний дат (data/dates.json): для каждого короткого года ищем
+           события, чей год мог обрезаться до него и чьи ключевые слова есть в
+           контексте. Одна однозначная кандидатура → детерминированно исправляем
+           без LLM.
+        2) Оставшиеся короткие года отправляем одним запросом модели (см.
+           _collect_year_fixes). Применяем замены кодом, ничего больше не трогаем.
+        """
+        if not text:
+            return text
+
+        # 1) База дат: уникальная кандидатура → применяем сразу.
+        result = text
+        for old, new in self._db_year_fixes(text, cancel):
+            if old == new:
+                continue
+            pattern = re.compile(r"(?<!\d)" + re.escape(old) + r"(?!\d)")
+            result = pattern.sub(new, result)
+
+        # 2) LLM для неоднозначных (или не найденных в базе) годов.
+        #    Запускаем на уже исправленном тексте, чтобы не решать дважды.
+        llm_fixes = self._collect_year_fixes(result, cancel)
+        for old, new in llm_fixes:
+            if old == new:
+                continue
+            pattern = re.compile(r"(?<!\d)" + re.escape(old) + r"(?!\d)")
+            result = pattern.sub(new, result)
+        return result
+
+    def _db_year_fixes(
+        self,
+        text: str,
+        cancel: Event | None = None,
+    ) -> list[tuple[str, str]]:
+        """Детерминированные исправления по базе дат.
+
+        Для каждого короткого года с контекстом ищет уникальную кандидатуру,
+        чей полный год мог обрезаться до короткого и чьё ключевое слово есть
+        в контексте. Уникальная кандидатура → возвращаем пару «старый → новый».
+        """
+        full_years = [int(m.group(0)) for m in _YEAR_FULL_RE.finditer(text)]
+        fixes: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for m in _YEAR_CARD_RE.finditer(text):
+            if cancel is not None and cancel.is_set():
+                break
+            year = m.group(1)
+            start = max(0, m.start() - 80)
+            end = min(len(text), m.end() + 80)
+            context = text[start:end].replace("\n", " ")
+            candidates = find_year_candidates(year, context, full_years)
+            if len(candidates) == 1:
+                new = str(candidates[0]["year"])
+                if (year, new) not in seen:
+                    seen.add((year, new))
+                    fixes.append((year, new))
+        return fixes
+
+    def _collect_year_fixes(
+        self,
+        text: str,
+        cancel: Event | None = None,
+    ) -> list[tuple[str, str]]:
+        """Возвращает пары «старый год → новый год» для исправления.
+
+        Строит карточку по каждому короткому году: сам год + ±80 символов
+        контекста. Если совпадений меньше контекстного окна — используем
+        всё, что доступно. Все карточки идут одним запросом.
+        """
+        cards: list[tuple[str, str]] = []
+        for m in _YEAR_CARD_RE.finditer(text):
+            if cancel is not None and cancel.is_set():
+                break
+            year = m.group(1)
+            start = max(0, m.start() - 80)
+            end = min(len(text), m.end() + 80)
+            context = text[start:end]
+            context = context.replace("\n", " ")
+            cards.append((year, context))
+
+        if not cards:
+            return []
+
+        # Слишком много карточек вызовет разбухание промпта — ужимаем.
+        if len(cards) > 25:
+            cards = cards[:25]
+
+        prompt_lines = [
+            DATE_PASS_PROMPT,
+            "",
+            "Года с контекстом:",
+        ]
+        for i, (year, context) in enumerate(cards, start=1):
+            prompt_lines.append(f"{i}. [{year}] …{context}…")
+        full_years = sorted({m.group(0) for m in _YEAR_FULL_RE.finditer(text)})
+        if full_years:
+            prompt_lines.append("")
+            prompt_lines.append(
+                "Четырёхзначные года, уже стоящие в тексте (ориентир эпохи): "
+                + ", ".join(full_years)
+            )
+        prompt = "\n".join(prompt_lines)
+
+        try:
+            resp = self._call_llm(prompt)
+        except Exception:
+            return []
+
+        return self._parse_year_fixes(resp)
+
+    @staticmethod
+    def _parse_year_fixes(resp: str) -> list[tuple[str, str]]:
+        """Парсит ответ вида «185 -> 1185», по одной паре на строку."""
+        fixes: list[tuple[str, str]] = []
+        for line in resp.splitlines():
+            m = re.match(r"^\s*(\d{1,3})\s*[-:->]+\s*(\d{4})\s*$", line.strip())
+            if m:
+                fixes.append((m.group(1), m.group(2)))
+        return fixes
 
     # ── Отдельные проходы ──────────────────────────────────────────────────
 
@@ -731,6 +938,7 @@ class LlamaCppEnhancer(BaseEnhancer):
             prompt += "\n" + TS_KEEP_RULE
         if topic:
             prompt += f"\nТема: {topic}"
+        prompt += "\n" + YEAR_FIX_RULE
         prompt += f"\n\nТекст:\n{text}"
         if stream_callback is not None:
             return self._call_llm_stream(prompt, stream_callback, cancel=cancel)
@@ -765,6 +973,7 @@ class LlamaCppEnhancer(BaseEnhancer):
             prompt += "\n" + TS_KEEP_RULE
         if topic:
             prompt += f"\nТема: {topic}"
+        prompt += "\n" + YEAR_FIX_RULE
         prompt += f"\n\nТекст:\n{text}"
         if stream_callback is not None:
             return self._call_llm_stream(prompt, stream_callback, cancel=cancel)
@@ -800,6 +1009,7 @@ class LlamaCppEnhancer(BaseEnhancer):
             prompt += "\n" + TS_KEEP_RULE
         if topic:
             prompt += f"\nТема: {topic}"
+        prompt += "\n" + YEAR_FIX_RULE
         prompt += f"\n\nТекст:\n{text}"
         if stream_callback is not None:
             return self._call_llm_stream(prompt, stream_callback, cancel=cancel)

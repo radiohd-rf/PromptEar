@@ -112,12 +112,20 @@ def test_ensure_timestamps_keeps_good_markers() -> None:
     assert files.ensure_timestamps(segments, good) == good
 
 
-def test_ensure_timestamps_rebuilds_bad_markers() -> None:
+def test_ensure_timestamps_rebuilds_when_markers_missing() -> None:
     segments = [_seg(0.0, 3.0, "Ноль."), _seg(5.0, 8.0, "Пять.")]
     bad = "текст [00:00] посреди фразы"
     result = files.ensure_timestamps(segments, bad)
     assert files.has_bad_ts_markers(result) is False
     assert files.has_ts_markers(result) is True
+
+
+def test_ensure_timestamps_keeps_mid_paragraph_markers() -> None:
+    # Меток достаточно для всех абзацев — оставляем их как есть, даже если
+    # они стоят посреди абзаца (модель привязала их к своим фрагментам).
+    segments = [_seg(0.0, 3.0, "Ноль. Пять.")]
+    text = "Начало [00:00] середина\n\n[00:05] потом"
+    assert files.ensure_timestamps(segments, text) == text
 
 
 def test_ensure_timestamps_exact_concat() -> None:

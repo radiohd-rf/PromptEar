@@ -55,6 +55,8 @@ class EnhancingEvent(PipelineEvent):
 
     active_pass: int
     total_passes: int
+    chunk_current: int = 0
+    chunk_total: int = 0
 
 
 @dataclass

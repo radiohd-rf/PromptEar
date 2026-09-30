@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -16,8 +16,10 @@ llama_server.pid
 # Runtime temp (файлы обработки/скачивания — внутри папки программы)
 temp/
 
-# Runtime data (настройки и логи приложения — портативный каталог данных)
+# Runtime data (настройки и логи приложения — портативный каталог данных;
+# dates.json — кодовая база дат, хранится в репозитории)
 data/
+!data/dates.json
 
 # Build artifacts
 dist/
@@ -84,4 +86,3 @@ di.ico
 
 # Test media (kept locally, not in repo)
 тестовые данные/
-

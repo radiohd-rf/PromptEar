@@ -121,7 +121,10 @@ LLAMA_GPU_LAYERS = 99
 # ── Multi-pass enhancement ──────────────────────────────────────────────────
 MULTI_PASS_MIN_RATIO = 0.6
 MULTI_PASS_MAX_RATIO = 1.4
-ENHANCER_CHUNK_SIZE = 3000  # symbols per chunk for long texts
+ENHANCER_CHUNK_SIZE = 2000  # symbols per chunk for long texts
+# ВАЖНО: чанк взят с запасом под LLM_CONTEXT (4096 токенов): промпт + входной
+# чанк (~0.6 токенов/символ для русской кириллицы) + вывод модели должны
+# умещаться, иначе llama-server режет хвост ответа и конец транскрибации теряется
 
 # ── GPU ─────────────────────────────────────────────────────────────────────
 NVIDIA_SMI_TIMEOUT = 5

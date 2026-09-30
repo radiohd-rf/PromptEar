@@ -189,9 +189,19 @@ class EnhanceStep(PipelineStep):
 
             def mp_progress(msg: str) -> None:
                 emit(LogEvent(f"    {msg}"))
-                m = re.match(r"проход (\d)/(\d)", msg, re.IGNORECASE)
+                m = re.search(r"проход (\d)/(\d)", msg, re.IGNORECASE)
                 if m:
-                    emit(EnhancingEvent(int(m.group(1)), int(m.group(2))))
+                    c = re.search(r"чанк (\d+)/(\d+)", msg, re.IGNORECASE)
+                    chunk_cur = int(c.group(1)) if c else 0
+                    chunk_tot = int(c.group(2)) if c else 0
+                    emit(
+                        EnhancingEvent(
+                            int(m.group(1)),
+                            int(m.group(2)),
+                            chunk_cur,
+                            chunk_tot,
+                        )
+                    )
 
             def mp_stream(text_so_far: str, pass_no: int = 0) -> None:
                 emit(

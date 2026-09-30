@@ -206,7 +206,10 @@ def ensure_timestamps(segments: list[Segment], text: str) -> str:
     expected = len(blocks)
     if expected == 0:
         return text
-    if len(TS_MARKER_RE.findall(text)) >= expected and not has_bad_ts_markers(text):
+    # Метки не пересобираем: если их достаточно, оставляем на своих местах,
+    # даже когда модель поставила их «посреди» предложения/абзаца — метка
+    # привязана к своему фрагменту, а не обязана начинать абзац.
+    if len(TS_MARKER_RE.findall(text)) >= expected:
         return text
 
     clean = strip_ts_markers(text).strip()

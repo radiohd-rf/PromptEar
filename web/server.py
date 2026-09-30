@@ -164,6 +164,8 @@ def _event_to_dict(event) -> dict:
                 "type": "enhancing",
                 "active_pass": event.active_pass,
                 "total_passes": event.total_passes,
+                "chunk_current": event.chunk_current,
+                "chunk_total": event.chunk_total,
             }
         case EnhancingStreamEvent():
             return {
