@@ -11,6 +11,7 @@ let liveFile = null;
 // уводят события других файлов (только сохраняем их тексты/статусы).
 // Снимается новым запуском. Без закрепления окно следует за работой.
 let userPinnedFile = null;
+let translating = false;  // Фаза «Перевод» результата запущенной задачи идёт
 let expectedDones = 1;      // сколько done-событий ждать от сервера (2 при переводе)
 let launchParams = {};   // последние параметры запуска (формат, тайм-коды, ИИ, движок, GPU)
 let appSettings = {asr_backend: 'whisper_base', use_gpu: false, output_format: 'docx', timestamps: false, ai_enabled: false};
@@ -49,6 +50,7 @@ const statusLabels = {
   processing: 'Подготовка',
   transcribing: 'В обработке',
   enhancing: 'Обработка',
+  translating: 'Перевод',
   done: 'Готово',
   skipped: 'Пропущено',
 };
@@ -715,9 +717,11 @@ function removeFile(idx) {
     if (wasCurrent) {
       setResultText('');
       syncResultActions();
+      hideDocBusy();
     }
   }
   syncAudioPlayer();
+  syncDocBusy();
 }
 
 function renderFileList() {
@@ -731,7 +735,9 @@ function renderFileList() {
   }
 
   list.innerHTML = files.map((f, i) => {
-    const st = fileStatuses[f.name] || 'queued';
+    const st = (translating && f.name === currentFileName)
+      ? 'translating'
+      : (fileStatuses[f.name] || 'queued');
     const selected = f.name === currentFileName;
     const checked = fileChecked[f.name] !== false;
     return `<li class="file-item ${selected ? 'selected' : ''}"
@@ -906,6 +912,7 @@ function selectFile(name) {
   renderFileList();
   setResultText(fileTexts[name] || '');
   syncAudioPlayer();
+  syncDocBusy();
 }
 
 // Кнопки «Копировать» и «Открыть в редакторе» — появляются, когда у
@@ -978,10 +985,16 @@ async function runPipeline() {
   setBusy(true);
   clearLog();
   addLog('=== PromptEar ===');
-  showSpinner();
   resetResult();
   fileAudio = {};
   showLivePanel();
+  // Сразу показываем матовое стекло: до событий файлов окно пусто,
+  // а подготовка, по которой статус придёт только на первом processing,
+  // уже идёт (загрузка/сканирование/этапы до транскрибации).
+  enhancePass = 0;
+  enhanceTotal = 0;
+  translateLangName = (p.translate && p.translate_name) || '';
+  showDocBusy(DOC_BUSY_LABELS.processing, DOC_BUSY_HINTS.processing);
 
   // сбросить статусы: выбранные — в очередь, остальные — «Пропущено»,
 // НО уже обработанные (есть текст) остаются «Готово». Текст и бейдж
@@ -1068,12 +1081,14 @@ function handleEvent(msg) {
     }
 
     case 'enhancing':
-      showRefineProgress(msg.active_pass, msg.total_passes);
+      enhancePass = msg.active_pass;
+      enhanceTotal = msg.total_passes || 0;
+      syncDocBusy();
       if (msg.active_pass === 1) {
         // Проход 1 начался: черновик whisper уже показан мгновенно —
         // просто выравниваем окно по полному тексту.
         const draft = fileTexts[liveFile] || '';
-        renderResultText(draft);
+        renderResultText(draft, true);
       } else if (lastPassText != null) {
         // предыдущий проход завершён — его полный текст мы уже получили,
         // плавно переходим: мигание → затухание → появление
@@ -1100,7 +1115,6 @@ function handleEvent(msg) {
         : 'Улучшено ИИ';
       if (!followFile(msg.filename)) { renderFileList(); break; }
       setLiveFile(msg.filename);
-      hideRefineProgress();
       startPassTransition(msg.text);
       break;
 
@@ -1108,11 +1122,12 @@ function handleEvent(msg) {
       if (!files.some(f => f.name === msg.filename)) break;  // файл удалён из списка
       fileStatuses[msg.filename] = msg.status;
       fileAudio[msg.filename] = !!msg.audio_ok;
-      if (msg.status === 'transcribing') {
+      if (msg.status === 'transcribing' || msg.status === 'processing') {
         autoFollow(msg.filename);
-        document.getElementById('skip-btn').style.display = '';
+        if (msg.status === 'transcribing') document.getElementById('skip-btn').style.display = '';
       }
       renderFileList();
+      syncDocBusy();
       if (msg.audio_ok && (currentFileName === msg.filename || followFile(msg.filename))) {
         syncAudioPlayer();
       }
@@ -1137,7 +1152,6 @@ function handleEvent(msg) {
       break;
 
     case 'transcribing':
-      hideRefineProgress();
       break;
 
     case 'busy':
@@ -1164,6 +1178,11 @@ function handleEvent(msg) {
       // текстом не дойдёт до клиента и окно останется с русским черновиком.
       if (expectedDones > 1) {
         expectedDones = 1;
+        // На первом done pipeline завершён, но впереди перевод результата.
+        // Пока идёт перевод — держим матовое стекло со статусом «Перевод».
+        translating = true;
+        syncDocBusy();
+        renderFileList();
         if (enhanceMode !== 'auto') awaitSyncAskResult();
         break;
       }
@@ -1207,6 +1226,7 @@ function setLiveFile(name) {
     renderFileList();
   }
   syncAudioPlayer();
+  syncDocBusy();
 }
 
 // Следовать ли окну за событием файла: да, если пользователь явно не
@@ -1244,12 +1264,85 @@ function setBusy(busy) {
   document.getElementById('cancel-btn').style.display = busy ? '' : 'none';
 }
 
+/* ── Оверлей занятости окна «Документ» (матовое стекло) ──
+   Накладывается на текст во время подготовки/транскрибации/
+   улучшения/перевода: текст «замыливается», по центру спиннер
+   со статусом и подсказкой. Скрывается для готового файла. */
+
+const DOC_BUSY_LABELS = {
+  processing: 'Подготовка аудио',
+  transcribing: 'Распознавание речи',
+  enhancing: 'Улучшение ИИ',
+};
+
+const DOC_BUSY_HINTS = {
+  processing: 'Слушаем файл: нормализуем звук, определяем язык и раскладываем на дорожки',
+  transcribing: 'Слушаем запись и записываем текст абзацами',
+  enhancing: 'ИИ перечитывает и шлифует текст',
+};
+
+let enhancePass = 0;
+let enhanceTotal = 0;
+let translateLangName = '';
+
+// Перезапускает CSS-анимации лоадера, чтобы при повторном показе они
+// начинались с нуля, а не с сохранённого места движения.
+function refireDocBusyLoader() {
+  const loader = document.getElementById('doc-busy-loader');
+  if (!loader) return;
+  const cls = loader.classList;
+  cls.add('ai-loader--refire');
+  // принудительный reflow, чтобы класс снялся на следующем кадре
+  void loader.offsetWidth;
+  cls.remove('ai-loader--refire');
+}
+
+function showDocBusy(label, hint) {
+  const overlay = document.getElementById('doc-busy-overlay');
+  const statusEl = document.getElementById('doc-busy-status');
+  if (!overlay || !statusEl) return;
+  // Перезапуск анимаций только при переходе из скрытого состояния,
+  // иначе между проходами улучшения вращение «прыгает» в начало.
+  const wasHidden = overlay.classList.contains('hidden');
+  statusEl.textContent = label || 'Обработка';
+  const hintEl = document.getElementById('doc-busy-hint');
+  if (hintEl) hintEl.textContent = hint || '';
+  if (wasHidden) refireDocBusyLoader();
+  overlay.classList.remove('hidden');
+}
+
+function hideDocBusy() {
+  const overlay = document.getElementById('doc-busy-overlay');
+  if (overlay) overlay.classList.add('hidden');
+}
+
+// Обновляет оверлей по статусу текущего файла. Во время перевода
+// (task['translate_lang']) накладываем «Перевод», независимо от статуса.
+function syncDocBusy() {
+  if (translating) {
+    showDocBusy('Перевод', translateLangName
+      ? `Переводим готовый текст на ${translateLangName}`
+      : 'Переводим готовый текст');
+    return;
+  }
+  const name = currentFileName || liveFile;
+  const st = name ? fileStatuses[name] : null;
+  const label = st ? DOC_BUSY_LABELS[st] : null;
+  if (!label) { hideDocBusy(); return; }
+  let hint = DOC_BUSY_HINTS[st] || '';
+  if (st === 'enhancing' && enhanceTotal > 0) {
+    hint = `ИИ шлифует текст — проход ${enhancePass} из ${enhanceTotal}`;
+  }
+  showDocBusy(label, hint);
+}
+
 function finish() {
-  hideSpinner();
+  translating = false;
+  hideDocBusy();
+  renderFileList();
   if (eventSource) { eventSource.close(); eventSource = null; }
   setBusy(false);
   document.getElementById('skip-btn').style.display = 'none';
-  hideRefineProgress();
 }
 
 /* ── Help modal ─────────────────────────────────────────── */
@@ -1316,13 +1409,15 @@ function escapeHtml(s) {
 
 // Таймкоды [MM:SS]/[HH:MM:SS] рисуем чипсами-статусами; остальной текст
 // экранируем перед вставкой в innerHTML.
-function renderResultText(text) {
+function renderResultText(text, toStart) {
   lastPlainResultText = text;
   const el = document.getElementById('result-text');
   const esc = escapeHtml(text);
   el.innerHTML = esc.replace(TS_BADGE_RE, '<span class="ts-badge">$1</span>');
   rebuildTsIndex();
-  el.scrollTop = el.scrollHeight;
+  // При стриминге держим внизу (виден последний фрагмент); на финальном
+  // результате (транскрибация/улучшение/перевод) отскроливаем к началу.
+  el.scrollTop = toStart ? 0 : el.scrollHeight;
 }
 
 function setStreamingText(text) {
@@ -1335,12 +1430,10 @@ function resetTyping() {
     clearTimeout(passTransitionTimer);
     passTransitionTimer = null;
   }
-  const el = document.getElementById('result-text');
-  if (el) el.classList.remove('pass-blink', 'pass-fade-out', 'pass-fade-in');
 }
 
 function finishStreaming(text) {
-  renderResultText(text);
+  renderResultText(text, true);
 }
 
 /* ── Live panel ──────────────────────────────────────────── */
@@ -1354,7 +1447,7 @@ function resetResult() {
   currentFileName = null;
   liveFile = null;
   userPinnedFile = null;
-  hideRefineProgress();
+  hideDocBusy();
   setResultText('');
   resetAudioPlayer();
 }
@@ -1496,9 +1589,12 @@ function hideAudioPlayer() {
 
 function syncAudioPlayer() {
   const name = currentFileName;
+  // Плеер показываем только после того, как матовое стекло занятости
+  // (подготовка/транскрибация/улучшение/перевод) спряталось.
+  const busy = !document.getElementById('doc-busy-overlay').classList.contains('hidden');
   const hasAudio = !!(taskId && name && fileAudio[name] && files.some(f => f.name === name));
-  if (!hasAudio) {
-    // Переключились на файл без аудио или его нет — гасим что играло.
+  if (!hasAudio || busy) {
+    // Переключились на файл без аудио, идёт обработка или его нет — гасим что играло.
     if (apCurName) resetAudioPlayer();
     else hideAudioPlayer();
     return;
@@ -1731,45 +1827,13 @@ function setResultText(text) {
   renderResultText(text);
 }
 
-function showRefineProgress(activePass, totalPasses) {
-  const wrap = document.getElementById('refine-progress');
-  wrap.style.display = 'flex';
-  const bar = document.getElementById('refine-progress-bar');
-  bar.style.width = `${Math.round((activePass / totalPasses) * 100)}%`;
-  document.getElementById('refine-progress-label').textContent =
-    `Проход ${activePass}/${totalPasses}`;
-}
-
-function hideRefineProgress() {
-  document.getElementById('refine-progress').style.display = 'none';
-}
-
-/* ── Переход между проходами геммы: мигание → затухание → появление ── */
+/* ── Переход между проходами геммы: мгновенная замена текста ── */
 
 let passTransitionTimer = null;
 
 function startPassTransition(newText) {
-  const el = document.getElementById('result-text');
   resetTyping();
-  if (passTransitionTimer) clearTimeout(passTransitionTimer);
-  // 1. текущий текст мигает ~5 сек (проход N завершён, обрабатываем результат)
-  el.classList.remove('pass-fade-out', 'pass-fade-in');
-  el.classList.add('pass-blink');
-  passTransitionTimer = setTimeout(() => {
-    // 2. затухание: текст на секунду исчезает
-    el.classList.remove('pass-blink');
-    el.classList.add('pass-fade-out');
-    passTransitionTimer = setTimeout(() => {
-      // 3. появляется полный текст нового прохода
-      el.classList.remove('pass-fade-out');
-      renderResultText(newText);
-      el.classList.add('pass-fade-in');
-      passTransitionTimer = setTimeout(() => {
-        el.classList.remove('pass-fade-in');
-        passTransitionTimer = null;
-      }, 700);
-    }, 1000);
-  }, 5000);
+  renderResultText(newText, true);
 }
 
 function copyResult() {
@@ -1924,14 +1988,6 @@ async function awaitSyncAskResult() {
 }
 
 /* ── UI helpers ──────────────────────────────────────────── */
-
-function showSpinner() {
-  document.getElementById('thinking-spinner').style.display = '';
-}
-
-function hideSpinner() {
-  document.getElementById('thinking-spinner').style.display = 'none';
-}
 
 function addLog(msg) {
   const log = document.getElementById('log');

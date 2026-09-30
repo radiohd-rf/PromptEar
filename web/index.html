@@ -25,7 +25,6 @@
       <button class="icon-btn line-icon" id="open-output-btn" onclick="openOutputFolder()" title="Открыть папку с результатами" aria-label="Открыть папку с результатами">
         <svg viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z"/></svg>
       </button>
-      <div id="thinking-spinner" class="spinner" style="display:none"></div>
       <button id="run-btn" onclick="openLaunchModal()">
         Параметры и Запуск
         <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
@@ -101,11 +100,24 @@
               </div>
             </div>
           </div>
-          <div id="refine-progress" style="display:none">
-            <div class="progress-track"><div id="refine-progress-bar"></div></div>
-            <span id="refine-progress-label"></span>
+          <div id="doc-text">
+            <div id="result-text"></div>
+            <div id="doc-busy-overlay" class="hidden">
+              <div id="doc-busy-loader" class="ai-loader" aria-hidden="true">
+                <span class="ai-loader-ring"></span>
+                <span class="ai-loader-ring ai-loader-ring--2"></span>
+                <span class="ai-loader-core"></span>
+                <span class="ai-loader-dot" style="--i:0"></span>
+                <span class="ai-loader-dot" style="--i:1"></span>
+                <span class="ai-loader-dot" style="--i:2"></span>
+                <span class="ai-loader-dot" style="--i:3"></span>
+                <span class="ai-loader-dot" style="--i:4"></span>
+                <span class="ai-loader-dot" style="--i:5"></span>
+              </div>
+              <div id="doc-busy-status" class="doc-busy-status"></div>
+              <div class="doc-busy-hint" id="doc-busy-hint">Скоро всё будет готово</div>
+            </div>
           </div>
-          <div id="result-text"></div>
           <div id="audio-player" class="live-footer" style="display:none">
             <div id="ap-ctrls">
               <button id="ap-play" onclick="audioToggle()" title="Плэй/Пауза" aria-label="Плэй/Пауза">
