@@ -45,6 +45,12 @@ SOURCE_DIRS = [
     "assets",
 ]
 
+# Файлы-данные, которые не попали в SOURCE_DIRS (data/ целиком игнорируется
+# git — персональные настройки; dates.json — кодовая база дат и обязателен).
+SOURCE_EXTRA_FILES = [
+    "data/dates.json",
+]
+
 EXCLUDE_SUFFIXES = {".pyc", ".pyo"}
 EXCLUDE_DIRS = {"__pycache__", ".git", ".github", ".pytest_cache", ".ruff_cache"}
 
@@ -196,6 +202,16 @@ def build_dist() -> None:
                     "__pycache__", ".git", ".github", ".pytest_cache", ".ruff_cache"
                 ),
             )
+
+    for rel in SOURCE_EXTRA_FILES:
+        src = ROOT / rel
+        if src.exists():
+            dst = build_dir / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            print(f"  {rel} скопирован")
+        else:
+            print(f"  ⚠ {rel} не найден, пропускаю")
 
     # 3. Скомпилировать launcher.cs → Запустить PromptEar.exe
     print("  Компиляция лаунчера...")
